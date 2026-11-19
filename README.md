@@ -1,5 +1,5 @@
 # news-image-20261119
 
-[![make.fun · news-image-20261119](https://make.fun/badge/news-image-20261119.svg)](https://make.fun/bounty/news-image-20261119?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261119)
-[![rank](https://make.fun/badge/news-image-20261119/ackzer/news-image-20261119/rank.svg)](https://make.fun/bounty/news-image-20261119/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261119)
-[![reward](https://make.fun/badge/news-image-20261119/ackzer/news-image-20261119/reward.svg)](https://make.fun/bounty/news-image-20261119?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261119)
+Program TypeScript yang menggambar ringkasan berita dunia 19 November 2026 menjadi satu gambar PNG 1024x1024.
+
+[BADGE1] [BADGE2] [BADGE3]

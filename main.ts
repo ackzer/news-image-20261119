@@ -8,6 +8,18 @@ const HEIGHT = 1024;
 
 const canvas = new Uint8Array(WIDTH * HEIGHT * 3);
 
+// Deterministic PRNG (xorshift32) - fixed seed for reproducibility
+let rngState = 0x12345678;
+function rand(): number {
+  rngState ^= rngState << 13;
+  rngState ^= rngState >>> 17;
+  rngState ^= rngState << 5;
+  return (rngState >>> 0) / 0x100000000;
+}
+function randInt(max: number): number {
+  return Math.floor(rand() * max);
+}
+
 function idx(x: number, y: number): number {
   return (y * WIDTH + x) * 3;
 }
@@ -289,26 +301,19 @@ function drawChar(ch: string, x: number, y: number, scale: number, r: number, g:
   if (code < 32 || code > 126) return Math.round(8 * scale);
   const charIndex = (code - 32) * 8;
   const w = Math.round(8 * scale);
-  const h = Math.round(8 * scale);
   for (let cy = 0; cy < 8; cy++) {
     const row = FONT_DATA[charIndex + cy];
     for (let cx = 0; cx < 8; cx++) {
       if (row & (1 << (7 - cx))) {
+        // Solid fill for each glyph pixel scaled up
         const px = Math.floor(x + cx * scale);
         const py = Math.floor(y + cy * scale);
         const pw = Math.ceil(scale);
         const ph = Math.ceil(scale);
-        for (let dy = 0; dy < ph; dy++) {
-          for (let dx = 0; dx < pw; dx++) {
-            blendPixel(px + dx, py + dy, r, g, b, 255);
-          }
-        }
+        fillRect(px, py, pw, ph, r, g, b);
         if (bold) {
-          for (let dy = 0; dy < ph; dy++) {
-            for (let dx = 0; dx < pw; dx++) {
-              blendPixel(px + dx + 1, py + dy, r, g, b, 200);
-            }
-          }
+          // Slight offset for bold effect
+          fillRect(px + 1, py, pw, ph, r, g, b);
         }
       }
     }
@@ -675,8 +680,8 @@ for (let i = 0; i < 3; i++) {
   } else if (card.illustration === 'intercept') {
     fillRect(illustX, illustY, illustW, heroIllustH, 15, 15, 30);
     for (let s = 0; s < 80; s++) {
-      const sx = illustX + Math.floor(Math.random() * illustW);
-      const sy = illustY + Math.floor(Math.random() * 60);
+      const sx = illustX + randInt(illustW);
+      const sy = illustY + randInt(60);
       setPixel(sx, sy, 255, 255, 255);
     }
     const towerX = illustX + 40;
@@ -694,9 +699,9 @@ for (let i = 0; i < 3; i++) {
   } else if (card.illustration === 'voyager') {
     fillRect(illustX, illustY, illustW, heroIllustH, 5, 5, 15);
     for (let s = 0; s < 200; s++) {
-      const sx = illustX + Math.floor(Math.random() * illustW);
-      const sy = illustY + Math.floor(Math.random() * heroIllustH);
-      const brightness = 180 + Math.floor(Math.random() * 75);
+      const sx = illustX + randInt(illustW);
+      const sy = illustY + randInt(heroIllustH);
+      const brightness = 180 + randInt(75);
       setPixel(sx, sy, brightness, brightness, brightness);
     }
 

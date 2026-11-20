@@ -1,18 +1,126 @@
-[
-  {"region": "World", "title": "Trump, Xi and Putin Hold Shenzhen Summit", "summary": "US, Chinese and Russian leaders met at APEC in Shenzhen, pledging UN reform and talks to cut nuclear risks."},
-  {"region": "Middle East", "title": "Houthi Debris Hits Riyadh Sovereign Tower", "summary": "Air defenses intercepted a missile over Saudi Arabia's capital, shattering glass on the 80-story PIF Tower."},
-  {"region": "Science", "title": "Voyager 1 Marks One Light-Day From Earth", "summary": "Now 25.9 billion km away after 49 years, NASA's probe became the first craft 24 radio-hours from home."},
-  {"region": "World", "title": "World Court Rules Myanmar Liable for Genocide", "summary": "In a final verdict, the ICJ held Myanmar accountable for 2016-17 Rohingya atrocities."},
-  {"region": "Asia-Pacific", "title": "Xi Pledges $20M for APEC Trade Integration", "summary": "China's leader urged lower trade barriers in Shenzhen and launched a regional hub."},
-  {"region": "Asia-Pacific", "title": "Tonga Declares Emergency in El Nino Drought", "summary": "Tonga followed Fiji in declaring a crisis as severe El Nino dryness hits water supply."},
-  {"region": "Asia-Pacific", "title": "IAEA Flags North Korea Uranium Expansion", "summary": "UN nuclear chief Rafael Grossi said Yongbyon expanded output of weapons-grade fuel."},
-  {"region": "Europe", "title": "Ukraine Allies and US Envoys Meet in Berlin", "summary": "Talks focused on air defense and energy aid as Britain pledged 1,000 long-range drones."},
-  {"region": "Europe", "title": "Neptune Missiles Halt Crimean Bridge Rail", "summary": "Kyiv confirmed overnight strikes hit the Kerch crossing, halting Russian rail traffic."},
-  {"region": "Europe", "title": "EU Commission Contains System Cyberattack", "summary": "Brussels held crisis talks after a breach disrupted HR and medical portals for days."},
-  {"region": "Middle East", "title": "Trump Weighs Iran Strikes Amid Gulf Clashes", "summary": "Israel urged new strikes on Iran as US jets hit Qeshm Island and drones targeted bases."},
-  {"region": "Americas", "title": "US Blacklists Guatemalan Groups Over Cartels", "summary": "Washington labeled three Guatemalan gangs terrorists for aiding Mexican drug cartels."},
-  {"region": "Americas", "title": "National Strike Disrupts Colombia's Cities", "summary": "Unions and opposition marched across Bogota, Medellin and Cali, blocking major transit."},
-  {"region": "Africa", "title": "Senegal Enforces 2026 Budget by Decree", "summary": "President Faye bypassed a deadlocked parliament to keep Senegal's IMF deal on track."},
-  {"region": "Africa", "title": "Somalia Expels UAE Envoy Over 'Aggression'", "summary": "Mogadishu ordered out the Emirati ambassador and recalled its own amid rising tensions."},
-  {"region": "Science", "title": "MIT Finds Antarctic Ice Cliffs Stabilize", "summary": "Tracking 15,000 cliffs, researchers found sea ridges often halt runaway ice collapse."}
-]
+{
+  "stories": [
+    {
+      "region": "World",
+      "title": "Trump, Xi and Putin Hold First Three-Way Summit",
+      "summary": "US, Chinese and Russian leaders met for 90 minutes at APEC in Shenzhen, issuing a peace declaration on nuclear risk and UN reform",
+      "source": "Reuters · AP"
+    },
+    {
+      "region": "Middle East",
+      "title": "Saudis Intercept Houthi Missiles Over Riyadh",
+      "summary": "Saudi air defenses intercepted Houthi missiles above the capital with debris hitting the PIF Tower district and no casualties reported",
+      "source": "Reuters"
+    },
+    {
+      "region": "Science",
+      "title": "Voyager 1 Marks One Light-Day From Earth",
+      "summary": "Now 25.9 billion km away after 49 years, NASA's probe became the first human-made craft 24 radio-hours from home",
+      "source": "NASA"
+    },
+    {
+      "region": "World",
+      "title": "World Court Rules Myanmar Committed Genocide",
+      "summary": "By a 9-6 vote in The Hague, the ICJ found Myanmar guilty of 2017 atrocities against the Rohingya and ordered reparations",
+      "source": "AP · UN News"
+    },
+    {
+      "region": "Americas",
+      "title": "Anthropic Debuts in Record $81.3B Nasdaq IPO",
+      "summary": "Trading under ticker ANT at $83 a share, the AI firm broke IPO records in New York",
+      "source": "Reuters · AP"
+    },
+    {
+      "region": "Middle East",
+      "title": "COP31 Draft Drops Fossil Fuel Exit and $120B Goal",
+      "summary": "UN negotiators in Antalya published a slimmed-down draft dropping fossil phaseout language and adaptation funding targets",
+      "source": "Reuters · AFP"
+    },
+    {
+      "region": "Asia-Pacific",
+      "title": "Korea Top Court Overturns Ex-PM Han's 15-Year Term",
+      "summary": "South Korea's Supreme Court in Seoul quashed Han Duck-soo's martial-law conviction and ordered a retrial",
+      "source": "AP · Yonhap"
+    },
+    {
+      "region": "Europe",
+      "title": "Denmark Unanimously Backs 109-0 US Arctic Pact",
+      "summary": "Parliament in Copenhagen approved the US-Denmark-Greenland Arctic security agreement in a 109-0 vote",
+      "source": "AP · Guardian"
+    },
+    {
+      "region": "Asia-Pacific",
+      "title": "Australia Jobless Rate Hits 5-Year High of 4.9%",
+      "summary": "Official ABS data showed unemployment climbed to 4.9% as 43,500 jobs were lost",
+      "source": "ABS · Reuters"
+    },
+    {
+      "region": "Asia-Pacific",
+      "title": "Cyclone Akvan Nears India Coast; 100,000 Evacuated",
+      "summary": "Over 100,000 residents moved to shelters along Odisha's coast ahead of Friday landfall",
+      "source": "IMD · AP"
+    },
+    {
+      "region": "Europe",
+      "title": "Ukrainian Missiles Hit Crimean Bridge Third Time",
+      "summary": "Overnight strikes hit the Kerch Strait crossing, halting Russian rail traffic across the bridge",
+      "source": "Euronews"
+    },
+    {
+      "region": "Africa",
+      "title": "Kenya Marathon Champion Jepchirchir Banned 3 Years",
+      "summary": "The AIU suspended the Olympic and world marathon champion for EPO doping and stripped her Sydney title",
+      "source": "AIU · AP"
+    },
+    {
+      "region": "Americas",
+      "title": "National Strike Disrupts Colombia's Major Cities",
+      "summary": "Unions and opposition groups staged marches across Bogota, Medellin and Cali",
+      "source": "Infobae"
+    },
+    {
+      "region": "Europe",
+      "title": "Ukraine Allies and US Envoys Meet in Berlin",
+      "summary": "European leaders and US envoys coordinated air defense support alongside 1,000 UK long-range drones",
+      "source": "Reuters"
+    },
+    {
+      "region": "Africa",
+      "title": "Somalia Expels UAE Ambassador in Diplomatic Rift",
+      "summary": "Mogadishu ordered the Emirati envoy out and recalled its own ambassador amid rising regional tensions",
+      "source": "Al Jazeera"
+    },
+    {
+      "region": "Science",
+      "title": "MIT Finds Antarctic Ice Cliffs Often Self-Stabilize",
+      "summary": "Tracking 15,000 cliffs, researchers found underwater seabed ridges frequently halt runaway ice-sheet collapse",
+      "source": "MIT"
+    }
+  ],
+  "kpi": [
+    { "value": "$81.3B", "label": "Anthropic Nasdaq IPO" },
+    { "value": "25.9B km", "label": "Voyager 1 light-day" },
+    { "value": "9-6", "label": "ICJ Myanmar verdict" },
+    { "value": "109-0", "label": "Denmark Arctic pact" },
+    { "value": "4.9%", "label": "Australia jobless high" },
+    { "value": "100K+", "label": "Cyclone Akvan shelters" }
+  ],
+  "pins": [
+    { "id": 1, "lat": 22.54, "lon": 114.06, "name": "Shenzhen" },
+    { "id": 2, "lat": 24.71, "lon": 46.68, "name": "Riyadh" },
+    { "id": 3, "lat": 0, "lon": 0, "name": "Voyager", "special": true },
+    { "id": 4, "lat": 52.07, "lon": 4.30, "name": "The Hague" },
+    { "id": 5, "lat": 40.71, "lon": -74.01, "name": "New York" },
+    { "id": 6, "lat": 36.90, "lon": 30.70, "name": "Antalya" },
+    { "id": 7, "lat": 37.56, "lon": 126.98, "name": "Seoul" },
+    { "id": 8, "lat": 55.68, "lon": 12.57, "name": "Copenhagen" },
+    { "id": 9, "lat": -35.28, "lon": 149.13, "name": "Canberra" },
+    { "id": 10, "lat": 20.27, "lon": 85.84, "name": "Odisha" },
+    { "id": 11, "lat": 45.35, "lon": 36.47, "name": "Kerch Strait" },
+    { "id": 12, "lat": -1.29, "lon": 36.82, "name": "Nairobi" },
+    { "id": 13, "lat": 4.71, "lon": -74.07, "name": "Bogota" },
+    { "id": 14, "lat": 52.52, "lon": 13.41, "name": "Berlin" },
+    { "id": 15, "lat": 2.05, "lon": 45.34, "name": "Mogadishu" },
+    { "id": 16, "lat": -78.0, "lon": 0, "name": "Antarctica" }
+  ]
+}

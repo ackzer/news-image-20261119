@@ -1,5 +1,5 @@
-# news-image-20261119
+# News Image 20261119
 
-Program TypeScript yang menggambar ringkasan berita dunia 19 November 2026 menjadi satu gambar PNG 1024x1024.
+A single image summarizing Thursday, 19 November 2026 world news — 16 stories across 7 regions.
 
-[BADGE1] [BADGE2] [BADGE3]
+<!-- badge lines to be added -->

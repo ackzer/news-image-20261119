@@ -1,1287 +1,927 @@
-import * as fs from 'fs';
-import * as zlib from 'zlib';
-import * as path from 'path';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { deflateSync } from 'node:zlib';
 
-// ============================================================================
-// Types & Constants
-// ============================================================================
-
-interface NewsItem {
-  region: string;
-  title: string;
-  summary: string;
-}
-
-interface RegionInfo {
-  name: string;
-  shortName: string;
-  color: number;
-  count: number;
-}
-
-interface Point {
-  x: number;
-  y: number;
-}
-
-interface Rect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-// Canvas dimensions
 const WIDTH = 1024;
 const HEIGHT = 1024;
 
-// Colors (0xRRGGBB)
-const COLORS = {
-  paper: 0xF4EFE4,
-  mastheadBg: 0x141C24,
-  accentRed: 0xC8232C,
-  white: 0xFFFFFF,
-  cream: 0xF4EFE4,
-  distBg: 0xEBE4D6,
-  cardBg: 0xFFFFFF,
-  cardBorder: 0xCDC5B6,
-  cardShadow: 0xE0D9CB,
-  titleInk: 0x12161C,
-  bodyInk: 0x3A3C44,
-  mutedInk: 0x66605E,
-  ocean: 0xA8C8E8,
-  land: 0xF4EFE4,
-  footerLine: 0xCDC5B6,
-  // Region colors
-  world: 0x204070,
-  asiaPacific: 0xBE202E,
-  europe: 0x006884,
-  middleEast: 0xBA6216,
-  americas: 0x247046,
-  africa: 0x762FB0,
-  science: 0x0C7E98,
-};
+const canvas = new Uint8Array(WIDTH * HEIGHT * 3);
 
-const REGIONS: RegionInfo[] = [
-  { name: 'World', shortName: 'WORLD', color: COLORS.world, count: 2 },
-  { name: 'Asia-Pacific', shortName: 'ASIA-PAC', color: COLORS.asiaPacific, count: 3 },
-  { name: 'Europe', shortName: 'EUROPE', color: COLORS.europe, count: 3 },
-  { name: 'Middle East', shortName: 'MID EAST', color: COLORS.middleEast, count: 2 },
-  { name: 'Americas', shortName: 'AMERICAS', color: COLORS.americas, count: 2 },
-  { name: 'Africa', shortName: 'AFRICA', color: COLORS.africa, count: 2 },
-  { name: 'Science', shortName: 'SCIENCE', color: COLORS.science, count: 2 },
-];
+function idx(x: number, y: number): number {
+  return (y * WIDTH + x) * 3;
+}
 
-const TOPIC_BADGES = [
-  'APEC', 'RIYADH', 'NASA', 'ICJ', '$20M', 'DROUGHT',
-  'IAEA', '1,000+', 'KERCH', 'CYBER', 'GULF', 'CARTELS',
-  'STRIKE', 'IMF', 'ENVOY', '15,000',
-];
-
-const KPI_ITEMS = [
-  { label: '$20M', detail: 'Xi APEC trade fund', regionColor: COLORS.asiaPacific },
-  { label: '25.9B km', detail: 'Voyager 1 light-day', regionColor: COLORS.science },
-  { label: '1,000+', detail: 'UK drones to Kyiv', regionColor: COLORS.europe },
-  { label: '49 YRS', detail: 'Voyager 1 mission age', regionColor: COLORS.science },
-  { label: '15,000', detail: 'Antarctic cliffs', regionColor: COLORS.science },
-];
-
-// ============================================================================
-// Canvas / Pixel Buffer
-// ============================================================================
-
-class Canvas {
-  private data: Uint8Array; // RGBA
-  private width: number;
-  private height: number;
-
-  constructor(width: number, height: number, bgColor: number = 0xFFFFFFFF) {
-    this.width = width;
-    this.height = height;
-    this.data = new Uint8Array(width * height * 4);
-    this.fill(bgColor);
+function setPixel(x: number, y: number, r: number, g: number, b: number): void {
+  if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT) {
+    const i = idx(x, y);
+    canvas[i] = r;
+    canvas[i + 1] = g;
+    canvas[i + 2] = b;
   }
+}
 
-  fill(color: number): void {
-    const r = (color >> 16) & 0xFF;
-    const g = (color >> 8) & 0xFF;
-    const b = color & 0xFF;
-    for (let i = 0; i < this.data.length; i += 4) {
-      this.data[i] = r;
-      this.data[i + 1] = g;
-      this.data[i + 2] = b;
-      this.data[i + 3] = 255;
+function blendPixel(x: number, y: number, r: number, g: number, b: number, a: number): void {
+  if (x < 0 || x >= WIDTH || y < 0 || y >= HEIGHT || a === 0) return;
+  if (a >= 255) { setPixel(x, y, r, g, b); return; }
+  const i = idx(x, y);
+  const ia = 255 - a;
+  canvas[i] = (canvas[i] * ia + r * a) >> 8;
+  canvas[i + 1] = (canvas[i + 1] * ia + g * a) >> 8;
+  canvas[i + 2] = (canvas[i + 2] * ia + b * a) >> 8;
+}
+
+function fillRect(x: number, y: number, w: number, h: number, r: number, g: number, b: number): void {
+  const x0 = Math.max(0, x);
+  const y0 = Math.max(0, y);
+  const x1 = Math.min(WIDTH, x + w);
+  const y1 = Math.min(HEIGHT, y + h);
+  for (let yy = y0; yy < y1; yy++) {
+    const base = yy * WIDTH * 3 + x0 * 3;
+    for (let xx = x0; xx < x1; xx++) {
+      canvas[base + (xx - x0) * 3] = r;
+      canvas[base + (xx - x0) * 3 + 1] = g;
+      canvas[base + (xx - x0) * 3 + 2] = b;
     }
   }
+}
 
-  setPixel(x: number, y: number, color: number, alpha: number = 255): void {
-    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return;
-    const idx = (y * this.width + x) * 4;
-    const r = (color >> 16) & 0xFF;
-    const g = (color >> 8) & 0xFF;
-    const b = color & 0xFF;
-    if (alpha === 255) {
-      this.data[idx] = r;
-      this.data[idx + 1] = g;
-      this.data[idx + 2] = b;
-      this.data[idx + 3] = 255;
-    } else {
-      // Alpha blend
-      const a = alpha / 255;
-      this.data[idx] = Math.round(this.data[idx] * (1 - a) + r * a);
-      this.data[idx + 1] = Math.round(this.data[idx + 1] * (1 - a) + g * a);
-      this.data[idx + 2] = Math.round(this.data[idx + 2] * (1 - a) + b * a);
-      this.data[idx + 3] = 255;
-    }
-  }
-
-  getPixel(x: number, y: number): number {
-    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return 0;
-    const idx = (y * this.width + x) * 4;
-    return (this.data[idx] << 16) | (this.data[idx + 1] << 8) | this.data[idx + 2];
-  }
-
-  getData(): Uint8Array {
-    return this.data;
-  }
-
-  getWidth(): number { return this.width; }
-  getHeight(): number { return this.height; }
-
-  // Drawing primitives
-  fillRect(x: number, y: number, w: number, h: number, color: number): void {
-    for (let yy = y; yy < y + h; yy++) {
-      for (let xx = x; xx < x + w; xx++) {
-        this.setPixel(xx, yy, color);
+function drawLine(x0: number, y0: number, x1: number, y1: number, r: number, g: number, b: number, thick = 1): void {
+  const dx = Math.abs(x1 - x0);
+  const dy = Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1;
+  const sy = y0 < y1 ? 1 : -1;
+  let err = (dx > dy ? dx : -dy) / 2;
+  while (true) {
+    for (let tx = -thick + 1; tx < thick; tx++) {
+      for (let ty = -thick + 1; ty < thick; ty++) {
+        setPixel(x0 + tx, y0 + ty, r, g, b);
       }
     }
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = err;
+    if (e2 > -dx) { err -= dy; x0 += sx; }
+    if (e2 < dy) { err += dx; y0 += sy; }
   }
+}
 
-  drawRect(x: number, y: number, w: number, h: number, color: number): void {
-    this.drawLine(x, y, x + w - 1, y, color);
-    this.drawLine(x, y + h - 1, x + w - 1, y + h - 1, color);
-    this.drawLine(x, y, x, y + h - 1, color);
-    this.drawLine(x + w - 1, y, x + w - 1, y + h - 1, color);
-  }
-
-  drawLine(x0: number, y0: number, x1: number, y1: number, color: number): void {
-    const dx = Math.abs(x1 - x0);
-    const dy = Math.abs(y1 - y0);
-    const sx = x0 < x1 ? 1 : -1;
-    const sy = y0 < y1 ? 1 : -1;
-    let err = dx - dy;
-    let x = x0;
-    let y = y0;
-
-    while (true) {
-      this.setPixel(x, y, color);
-      if (x === x1 && y === y1) break;
-      const e2 = 2 * err;
-      if (e2 > -dy) { err -= dy; x += sx; }
-      if (e2 < dx) { err += dx; y += sy; }
+function drawCircle(cx: number, cy: number, radius: number, r: number, g: number, b: number, fill = false): void {
+  const x0 = Math.max(0, cx - radius);
+  const y0 = Math.max(0, cy - radius);
+  const x1 = Math.min(WIDTH - 1, cx + radius);
+  const y1 = Math.min(HEIGHT - 1, cy + radius);
+  const r2 = radius * radius;
+  for (let y = y0; y <= y1; y++) {
+    const dy = y - cy;
+    const dxMax = Math.floor(Math.sqrt(Math.max(0, r2 - dy * dy)));
+    if (fill) {
+      const xl = Math.max(0, cx - dxMax);
+      const xr = Math.min(WIDTH - 1, cx + dxMax);
+      const base = y * WIDTH * 3 + xl * 3;
+      for (let x = xl; x <= xr; x++) {
+        canvas[base + (x - xl) * 3] = r;
+        canvas[base + (x - xl) * 3 + 1] = g;
+        canvas[base + (x - xl) * 3 + 2] = b;
+      }
+    } else {
+      const xl = cx - dxMax;
+      const xr = cx + dxMax;
+      if (xl >= 0 && xl < WIDTH) setPixel(xl, y, r, g, b);
+      if (xr >= 0 && xr < WIDTH) setPixel(xr, y, r, g, b);
     }
   }
-
-  drawThickLine(x0: number, y0: number, x1: number, y1: number, color: number, thickness: number = 1): void {
-    if (thickness <= 1) {
-      this.drawLine(x0, y0, x1, y1, color);
-      return;
+  for (let x = x0; x <= x1; x++) {
+    const dx = x - cx;
+    const dyMax = Math.floor(Math.sqrt(Math.max(0, r2 - dx * dx)));
+    if (!fill) {
+      const yt = cy - dyMax;
+      const yb = cy + dyMax;
+      if (yt >= 0 && yt < HEIGHT) setPixel(x, yt, r, g, b);
+      if (yb >= 0 && yb < HEIGHT) setPixel(x, yb, r, g, b);
     }
-    const dx = x1 - x0;
-    const dy = y1 - y0;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len === 0) return;
-    const nx = -dy / len * (thickness / 2);
-    const ny = dx / len * (thickness / 2);
-
-    // Draw as polygon
-    const pts: Point[] = [
-      { x: x0 + nx, y: y0 + ny },
-      { x: x1 + nx, y: y1 + ny },
-      { x: x1 - nx, y: y1 - ny },
-      { x: x0 - nx, y: y0 - ny },
-    ];
-    this.fillPolygon(pts, color);
   }
+}
 
-  fillPolygon(points: Point[], color: number): void {
-    if (points.length < 3) return;
-
-    // Find bounds
-    let minY = points[0].y, maxY = points[0].y;
-    for (const p of points) {
-      if (p.y < minY) minY = p.y;
-      if (p.y > maxY) maxY = p.y;
-    }
-
-    for (let y = Math.ceil(minY); y <= Math.floor(maxY); y++) {
+function drawPolygon(points: [number, number][], r: number, g: number, b: number, fill = false): void {
+  if (fill && points.length >= 3) {
+    const minY = Math.max(0, Math.min(...points.map(p => p[1])));
+    const maxY = Math.min(HEIGHT - 1, Math.max(...points.map(p => p[1])));
+    for (let y = minY; y <= maxY; y++) {
       const intersections: number[] = [];
       for (let i = 0; i < points.length; i++) {
-        const p1 = points[i];
-        const p2 = points[(i + 1) % points.length];
-        if ((p1.y <= y && p2.y > y) || (p2.y <= y && p1.y > y)) {
-          const x = p1.x + (y - p1.y) * (p2.x - p1.x) / (p2.y - p1.y);
+        const [x1, y1] = points[i];
+        const [x2, y2] = points[(i + 1) % points.length];
+        if ((y1 <= y && y2 > y) || (y2 <= y && y1 > y)) {
+          const x = x1 + (y - y1) * (x2 - x1) / (y2 - y1);
           intersections.push(x);
         }
       }
       intersections.sort((a, b) => a - b);
       for (let i = 0; i < intersections.length; i += 2) {
-        const xStart = Math.ceil(intersections[i]);
-        const xEnd = Math.floor(intersections[i + 1]);
-        for (let x = xStart; x <= xEnd; x++) {
-          this.setPixel(x, y, color);
+        const xl = Math.max(0, Math.ceil(intersections[i]));
+        const xr = Math.min(WIDTH - 1, Math.floor(intersections[i + 1]));
+        const base = y * WIDTH * 3 + xl * 3;
+        for (let x = xl; x <= xr; x++) {
+          canvas[base + (x - xl) * 3] = r;
+          canvas[base + (x - xl) * 3 + 1] = g;
+          canvas[base + (x - xl) * 3 + 2] = b;
+        }
+      }
+    }
+    for (let i = 0; i < points.length; i++) {
+      const [x1, y1] = points[i];
+      const [x2, y2] = points[(i + 1) % points.length];
+      drawLine(Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2), r, g, b, 1);
+    }
+  } else {
+    for (let i = 0; i < points.length; i++) {
+      const [x1, y1] = points[i];
+      const [x2, y2] = points[(i + 1) % points.length];
+      drawLine(Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2), r, g, b, 1);
+    }
+  }
+}
+
+function drawAALine(x0: number, y0: number, x1: number, y1: number, r: number, g: number, b: number, thick = 1): void {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len === 0) return;
+  const steps = Math.ceil(len);
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const x = x0 + dx * t;
+    const y = y0 + dy * t;
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    const fx = x - ix;
+    const fy = y - iy;
+    const a00 = (1 - fx) * (1 - fy);
+    const a01 = (1 - fx) * fy;
+    const a10 = fx * (1 - fy);
+    const a11 = fx * fy;
+    for (let tx = -thick + 1; tx < thick; tx++) {
+      for (let ty = -thick + 1; ty < thick; ty++) {
+        blendPixel(ix + tx, iy + ty, r, g, b, Math.round(a00 * 255));
+        blendPixel(ix + 1 + tx, iy + ty, r, g, b, Math.round(a10 * 255));
+        blendPixel(ix + tx, iy + 1 + ty, r, g, b, Math.round(a01 * 255));
+        blendPixel(ix + 1 + tx, iy + 1 + ty, r, g, b, Math.round(a11 * 255));
+      }
+    }
+  }
+}
+
+const FONT_DATA: number[] = [];
+for (let i = 32; i <= 126; i++) {
+  const charCode = i;
+  const pattern: number[] = [];
+  for (let y = 0; y < 8; y++) {
+    let row = 0;
+    for (let x = 0; x < 8; x++) {
+      const bit = 7 - x;
+      let on = false;
+      switch (charCode) {
+        case 32: on = false; break;
+        case 33: on = [0,0,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 34: on = [0,1,1,0,0,0,0,0][y] & (1<<bit); break;
+        case 35: on = [0,1,0,1,1,1,1,0][y] & (1<<bit); break;
+        case 36: on = [0,0,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 37: on = [1,1,1,0,0,1,1,1][y] & (1<<bit); break;
+        case 38: on = [0,1,1,1,1,0,1,0][y] & (1<<bit); break;
+        case 39: on = [0,1,1,0,0,0,0,0][y] & (1<<bit); break;
+        case 40: on = [0,0,1,1,1,0,0,0][y] & (1<<bit); break;
+        case 41: on = [0,0,0,1,1,1,0,0][y] & (1<<bit); break;
+        case 42: on = [0,1,0,1,0,1,0,1][y] & (1<<bit); break;
+        case 43: on = [0,0,0,1,1,1,0,0][y] & (1<<bit); break;
+        case 44: on = [0,0,0,0,0,1,1,0][y] & (1<<bit); break;
+        case 45: on = [0,0,0,1,1,1,0,0][y] & (1<<bit); break;
+        case 46: on = [0,0,0,0,0,0,1,1][y] & (1<<bit); break;
+        case 47: on = [1,0,0,0,1,0,0,1][y] & (1<<bit); break;
+        case 48: on = [0,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 49: on = [0,0,0,1,1,0,0,0][y] & (1<<bit); break;
+        case 50: on = [1,1,1,1,1,0,0,0][y] & (1<<bit); break;
+        case 51: on = [1,1,1,1,1,1,1,1][y] & (1<<bit); break;
+        case 52: on = [1,0,0,1,1,1,1,0][y] & (1<<bit); break;
+        case 53: on = [1,1,1,0,1,1,1,1][y] & (1<<bit); break;
+        case 54: on = [0,1,1,1,1,1,1,1][y] & (1<<bit); break;
+        case 55: on = [1,1,1,1,0,0,0,0][y] & (1<<bit); break;
+        case 56: on = [0,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 57: on = [0,1,1,1,1,0,1,0][y] & (1<<bit); break;
+        case 58: on = [0,0,1,1,0,0,1,1][y] & (1<<bit); break;
+        case 59: on = [0,0,1,1,0,0,1,1][y] & (1<<bit); break;
+        case 60: on = [0,0,0,1,1,0,0,0][y] & (1<<bit); break;
+        case 61: on = [0,0,1,1,1,1,0,0][y] & (1<<bit); break;
+        case 62: on = [0,0,0,1,1,0,0,0][y] & (1<<bit); break;
+        case 63: on = [0,1,1,1,1,0,0,0][y] & (1<<bit); break;
+        case 64: on = [0,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 65: on = [0,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 66: on = [1,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 67: on = [0,1,1,1,1,1,0,0][y] & (1<<bit); break;
+        case 68: on = [1,1,1,1,1,1,0,1][y] & (1<<bit); break;
+        case 69: on = [1,1,1,1,1,1,1,1][y] & (1<<bit); break;
+        case 70: on = [1,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 71: on = [0,1,1,1,1,0,0,0][y] & (1<<bit); break;
+        case 72: on = [1,0,0,1,1,0,0,1][y] & (1<<bit); break;
+        case 73: on = [1,1,1,1,1,1,1,1][y] & (1<<bit); break;
+        case 74: on = [0,1,1,1,1,0,0,0][y] & (1<<bit); break;
+        case 75: on = [1,0,0,1,1,0,1,0][y] & (1<<bit); break;
+        case 76: on = [1,0,0,0,0,0,0,0][y] & (1<<bit); break;
+        case 77: on = [1,0,0,1,1,0,0,1][y] & (1<<bit); break;
+        case 78: on = [1,0,0,0,1,0,0,1][y] & (1<<bit); break;
+        case 79: on = [0,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 80: on = [1,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 81: on = [0,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 82: on = [1,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 83: on = [0,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 84: on = [1,1,1,1,1,1,1,1][y] & (1<<bit); break;
+        case 85: on = [1,0,0,0,0,0,1,1][y] & (1<<bit); break;
+        case 86: on = [1,0,0,0,0,1,0,1][y] & (1<<bit); break;
+        case 87: on = [1,0,0,1,0,1,0,1][y] & (1<<bit); break;
+        case 88: on = [1,0,0,0,1,0,0,1][y] & (1<<bit); break;
+        case 89: on = [1,0,0,0,1,0,0,0][y] & (1<<bit); break;
+        case 90: on = [1,1,1,1,1,1,1,1][y] & (1<<bit); break;
+        case 91: on = [0,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 92: on = [1,0,0,0,0,0,0,1][y] & (1<<bit); break;
+        case 93: on = [0,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 94: on = [0,1,0,1,0,0,0,0][y] & (1<<bit); break;
+        case 95: on = [0,0,0,0,0,0,1,1][y] & (1<<bit); break;
+        case 96: on = [0,1,0,0,0,0,0,0][y] & (1<<bit); break;
+        case 97: on = [0,0,0,0,1,1,1,0][y] & (1<<bit); break;
+        case 98: on = [1,0,0,0,1,1,1,0][y] & (1<<bit); break;
+        case 99: on = [0,0,0,0,1,1,1,0][y] & (1<<bit); break;
+        case 100: on = [0,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 101: on = [0,0,0,0,1,1,1,0][y] & (1<<bit); break;
+        case 102: on = [0,0,1,1,1,1,0,0][y] & (1<<bit); break;
+        case 103: on = [0,1,1,1,1,1,1,1][y] & (1<<bit); break;
+        case 104: on = [1,0,0,0,1,1,1,0][y] & (1<<bit); break;
+        case 105: on = [0,1,0,0,0,1,0,0][y] & (1<<bit); break;
+        case 106: on = [0,0,1,0,0,0,1,1][y] & (1<<bit); break;
+        case 107: on = [1,0,0,0,1,0,1,0][y] & (1<<bit); break;
+        case 108: on = [0,1,1,1,1,1,1,1][y] & (1<<bit); break;
+        case 109: on = [0,0,0,0,1,0,1,0][y] & (1<<bit); break;
+        case 110: on = [0,0,0,0,1,1,1,0][y] & (1<<bit); break;
+        case 111: on = [0,0,0,0,1,1,1,0][y] & (1<<bit); break;
+        case 112: on = [0,0,0,0,1,1,1,0][y] & (1<<bit); break;
+        case 113: on = [0,1,1,1,1,1,1,0][y] & (1<<bit); break;
+        case 114: on = [0,0,0,0,1,1,0,0][y] & (1<<bit); break;
+        case 115: on = [0,0,0,1,1,1,1,0][y] & (1<<bit); break;
+        case 116: on = [0,0,1,1,1,1,1,1][y] & (1<<bit); break;
+        case 117: on = [0,0,0,0,1,0,0,1][y] & (1<<bit); break;
+        case 118: on = [0,0,0,0,1,0,1,0][y] & (1<<bit); break;
+        case 119: on = [0,0,0,0,1,0,1,0][y] & (1<<bit); break;
+        case 120: on = [0,0,0,0,1,0,1,0][y] & (1<<bit); break;
+        case 121: on = [0,0,0,0,1,1,1,1][y] & (1<<bit); break;
+        case 122: on = [1,1,1,1,0,1,1,1][y] & (1<<bit); break;
+        case 123: on = [0,0,1,0,1,0,1,0][y] & (1<<bit); break;
+        case 124: on = [0,1,0,1,0,1,0,1][y] & (1<<bit); break;
+        case 125: on = [0,1,0,1,0,1,0,0][y] & (1<<bit); break;
+        case 126: on = [0,0,0,1,1,0,0,0][y] & (1<<bit); break;
+      }
+      if (on) row |= (1 << bit);
+    }
+    pattern.push(row);
+  }
+  FONT_DATA.push(...pattern);
+}
+
+function drawChar(ch: string, x: number, y: number, scale: number, r: number, g: number, b: number, bold = false): number {
+  const code = ch.charCodeAt(0);
+  if (code < 32 || code > 126) return Math.round(8 * scale);
+  const charIndex = (code - 32) * 8;
+  const w = Math.round(8 * scale);
+  const h = Math.round(8 * scale);
+  for (let cy = 0; cy < 8; cy++) {
+    const row = FONT_DATA[charIndex + cy];
+    for (let cx = 0; cx < 8; cx++) {
+      if (row & (1 << (7 - cx))) {
+        const px = Math.floor(x + cx * scale);
+        const py = Math.floor(y + cy * scale);
+        const pw = Math.ceil(scale);
+        const ph = Math.ceil(scale);
+        for (let dy = 0; dy < ph; dy++) {
+          for (let dx = 0; dx < pw; dx++) {
+            blendPixel(px + dx, py + dy, r, g, b, 255);
+          }
+        }
+        if (bold) {
+          for (let dy = 0; dy < ph; dy++) {
+            for (let dx = 0; dx < pw; dx++) {
+              blendPixel(px + dx + 1, py + dy, r, g, b, 200);
+            }
+          }
         }
       }
     }
   }
+  return w;
+}
 
-  drawCircle(cx: number, cy: number, r: number, color: number, filled: boolean = false): void {
-    if (filled) {
-      for (let y = -r; y <= r; y++) {
-        const dx = Math.floor(Math.sqrt(r * r - y * y));
-        for (let x = -dx; x <= dx; x++) {
-          this.setPixel(cx + x, cy + y, color);
-        }
-      }
+function drawText(text: string, x: number, y: number, scale: number, r: number, g: number, b: number, bold = false, maxWidth?: number): number {
+  let cursorX = x;
+  const words = text.split(' ');
+  let lineHeight = Math.round(8 * scale * 1.3);
+  let currentLine = '';
+  let lineCount = 0;
+  for (const word of words) {
+    const testLine = currentLine + (currentLine ? ' ' : '') + word;
+    let testWidth = 0;
+    for (const ch of testLine) testWidth += drawChar(ch, 0, 0, scale, 0,0,0) + Math.round(scale * 0.3);
+    if (maxWidth && testWidth > maxWidth && currentLine) {
+      drawText(currentLine, x, y + lineCount * lineHeight, scale, r, g, b, bold);
+      currentLine = word;
+      lineCount++;
     } else {
-      // Midpoint circle algorithm
-      let x = r;
-      let y = 0;
-      let err = 0;
-      while (x >= y) {
-        this.setPixel(cx + x, cy + y, color);
-        this.setPixel(cx + y, cy + x, color);
-        this.setPixel(cx - y, cy + x, color);
-        this.setPixel(cx - x, cy + y, color);
-        this.setPixel(cx - x, cy - y, color);
-        this.setPixel(cx - y, cy - x, color);
-        this.setPixel(cx + y, cy - x, color);
-        this.setPixel(cx + x, cy - y, color);
-        y++;
-        err += 1 + 2 * y;
-        if (2 * (err - x) + 1 > 0) {
-          x--;
-          err += 1 - 2 * x;
-        }
-      }
+      currentLine = testLine;
     }
   }
-
-  drawArc(cx: number, cy: number, r: number, startAngle: number, endAngle: number, color: number, thickness: number = 1): void {
-    const steps = Math.max(16, Math.floor(r * 0.5));
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      const angle = startAngle + t * (endAngle - startAngle);
-      const x = Math.round(cx + r * Math.cos(angle));
-      const y = Math.round(cy + r * Math.sin(angle));
-      if (thickness <= 1) {
-        this.setPixel(x, y, color);
-      } else {
-        for (let dx = -Math.floor(thickness/2); dx <= Math.floor(thickness/2); dx++) {
-          for (let dy = -Math.floor(thickness/2); dy <= Math.floor(thickness/2); dy++) {
-            this.setPixel(x + dx, y + dy, color);
-          }
-        }
-      }
-    }
+  if (currentLine) {
+    drawText(currentLine, x, y + lineCount * lineHeight, scale, r, g, b, bold);
+    lineCount++;
   }
-
-  drawVerticalGradient(x: number, y: number, w: number, h: number, colorTop: number, colorBottom: number): void {
-    const r1 = (colorTop >> 16) & 0xFF;
-    const g1 = (colorTop >> 8) & 0xFF;
-    const b1 = colorTop & 0xFF;
-    const r2 = (colorBottom >> 16) & 0xFF;
-    const g2 = (colorBottom >> 8) & 0xFF;
-    const b2 = colorBottom & 0xFF;
-
-    for (let yy = 0; yy < h; yy++) {
-      const t = yy / (h - 1);
-      const r = Math.round(r1 * (1 - t) + r2 * t);
-      const g = Math.round(g1 * (1 - t) + g2 * t);
-      const b = Math.round(b1 * (1 - t) + b2 * t);
-      const color = (r << 16) | (g << 8) | b;
-      for (let xx = 0; xx < w; xx++) {
-        this.setPixel(x + xx, y + yy, color);
-      }
-    }
-  }
-
-  drawShadow(x: number, y: number, w: number, h: number, radius: number = 4): void {
-    // Simple drop shadow - draw offset rectangles with decreasing alpha
-    for (let i = radius; i > 0; i--) {
-      const alpha = Math.floor(30 * (i / radius));
-      const shadowColor = COLORS.cardShadow;
-      this.fillRect(x + i, y + i, w, h, shadowColor);
-      // Could add alpha blending here but keeping simple
-    }
-  }
+  return lineCount * lineHeight;
 }
 
-// ============================================================================
-// Bitmap Font (5x7 scaled)
-// ============================================================================
-
-// 5x7 font for ASCII 32-126
-const FONT_5x7: number[][] = [
-  // Space (32)
-  [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-  // ! (33)
-  [0x10, 0x10, 0x10, 0x10, 0x10, 0x00, 0x10],
-  // " (34)
-  [0x28, 0x28, 0x10, 0x00, 0x00, 0x00, 0x00],
-  // # (35)
-  [0x28, 0x7C, 0x28, 0x7C, 0x28, 0x00, 0x00],
-  // $ (36)
-  [0x10, 0x38, 0x54, 0x38, 0x54, 0x38, 0x10],
-  // % (37)
-  [0x64, 0x68, 0x10, 0x20, 0x48, 0x94, 0x0C],
-  // & (38)
-  [0x10, 0x28, 0x28, 0x10, 0x2A, 0x2A, 0x1C],
-  // ' (39)
-  [0x10, 0x10, 0x08, 0x00, 0x00, 0x00, 0x00],
-  // ( (40)
-  [0x04, 0x08, 0x10, 0x10, 0x10, 0x08, 0x04],
-  // ) (41)
-  [0x20, 0x10, 0x08, 0x08, 0x08, 0x10, 0x20],
-  // * (42)
-  [0x00, 0x08, 0x10, 0x38, 0x10, 0x08, 0x00],
-  // + (43)
-  [0x00, 0x08, 0x08, 0x3E, 0x08, 0x08, 0x00],
-  // , (44)
-  [0x00, 0x00, 0x00, 0x00, 0x10, 0x10, 0x08],
-  // - (45)
-  [0x00, 0x00, 0x00, 0x3E, 0x00, 0x00, 0x00],
-  // . (46)
-  [0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x10],
-  // / (47)
-  [0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80],
-  // 0 (48)
-  [0x3C, 0x42, 0x46, 0x4A, 0x52, 0x62, 0x3C],
-  // 1 (49)
-  [0x08, 0x18, 0x28, 0x08, 0x08, 0x08, 0x3E],
-  // 2 (50)
-  [0x3C, 0x42, 0x02, 0x0C, 0x30, 0x40, 0x7E],
-  // 3 (51)
-  [0x3C, 0x42, 0x02, 0x1C, 0x02, 0x42, 0x3C],
-  // 4 (52)
-  [0x04, 0x0C, 0x14, 0x24, 0x7E, 0x04, 0x04],
-  // 5 (53)
-  [0x7E, 0x40, 0x7C, 0x02, 0x02, 0x42, 0x3C],
-  // 6 (54)
-  [0x1C, 0x20, 0x40, 0x7C, 0x42, 0x42, 0x3C],
-  // 7 (55)
-  [0x7E, 0x02, 0x04, 0x08, 0x10, 0x10, 0x10],
-  // 8 (56)
-  [0x3C, 0x42, 0x42, 0x3C, 0x42, 0x42, 0x3C],
-  // 9 (57)
-  [0x3C, 0x42, 0x42, 0x3E, 0x02, 0x04, 0x38],
-  // : (58)
-  [0x00, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00],
-  // ; (59)
-  [0x00, 0x18, 0x18, 0x00, 0x18, 0x18, 0x08],
-  // < (60)
-  [0x04, 0x08, 0x10, 0x20, 0x10, 0x08, 0x04],
-  // = (61)
-  [0x00, 0x00, 0x3E, 0x00, 0x3E, 0x00, 0x00],
-  // > (62)
-  [0x20, 0x10, 0x08, 0x04, 0x08, 0x10, 0x20],
-  // ? (63)
-  [0x3C, 0x42, 0x02, 0x0C, 0x10, 0x00, 0x10],
-  // @ (64)
-  [0x3C, 0x42, 0x5A, 0x5A, 0x5E, 0x40, 0x3C],
-  // A (65)
-  [0x1C, 0x22, 0x42, 0x7E, 0x42, 0x42, 0x42],
-  // B (66)
-  [0x7C, 0x42, 0x42, 0x7C, 0x42, 0x42, 0x7C],
-  // C (67)
-  [0x3C, 0x42, 0x40, 0x40, 0x40, 0x42, 0x3C],
-  // D (68)
-  [0x78, 0x44, 0x42, 0x42, 0x42, 0x44, 0x78],
-  // E (69)
-  [0x7E, 0x40, 0x40, 0x7C, 0x40, 0x40, 0x7E],
-  // F (70)
-  [0x7E, 0x40, 0x40, 0x7C, 0x40, 0x40, 0x40],
-  // G (71)
-  [0x3C, 0x42, 0x40, 0x4E, 0x42, 0x42, 0x3C],
-  // H (72)
-  [0x42, 0x42, 0x42, 0x7E, 0x42, 0x42, 0x42],
-  // I (73)
-  [0x3C, 0x10, 0x10, 0x10, 0x10, 0x10, 0x3C],
-  // J (74)
-  [0x1E, 0x08, 0x08, 0x08, 0x08, 0x48, 0x30],
-  // K (75)
-  [0x42, 0x44, 0x48, 0x70, 0x48, 0x44, 0x42],
-  // L (76)
-  [0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x7E],
-  // M (77)
-  [0x42, 0x66, 0x5A, 0x5A, 0x42, 0x42, 0x42],
-  // N (78)
-  [0x42, 0x62, 0x52, 0x4A, 0x46, 0x42, 0x42],
-  // O (79)
-  [0x3C, 0x42, 0x42, 0x42, 0x42, 0x42, 0x3C],
-  // P (80)
-  [0x7C, 0x42, 0x42, 0x7C, 0x40, 0x40, 0x40],
-  // Q (81)
-  [0x3C, 0x42, 0x42, 0x42, 0x4A, 0x44, 0x3A],
-  // R (82)
-  [0x7C, 0x42, 0x42, 0x7C, 0x48, 0x44, 0x42],
-  // S (83)
-  [0x3C, 0x42, 0x40, 0x3C, 0x02, 0x42, 0x3C],
-  // T (84)
-  [0x7E, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10],
-  // U (85)
-  [0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x3C],
-  // V (86)
-  [0x42, 0x42, 0x42, 0x42, 0x42, 0x24, 0x18],
-  // W (87)
-  [0x42, 0x42, 0x42, 0x5A, 0x5A, 0x66, 0x42],
-  // X (88)
-  [0x42, 0x42, 0x24, 0x18, 0x24, 0x42, 0x42],
-  // Y (89)
-  [0x42, 0x42, 0x24, 0x18, 0x18, 0x18, 0x18],
-  // Z (90)
-  [0x7E, 0x02, 0x04, 0x08, 0x10, 0x20, 0x7E],
-  // [ (91)
-  [0x3C, 0x20, 0x20, 0x20, 0x20, 0x20, 0x3C],
-  // \ (92)
-  [0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02],
-  // ] (93)
-  [0x3C, 0x04, 0x04, 0x04, 0x04, 0x04, 0x3C],
-  // ^ (94)
-  [0x10, 0x28, 0x44, 0x00, 0x00, 0x00, 0x00],
-  // _ (95)
-  [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7E],
-  // ` (96)
-  [0x20, 0x10, 0x08, 0x00, 0x00, 0x00, 0x00],
-  // a (97)
-  [0x00, 0x00, 0x3C, 0x02, 0x3E, 0x42, 0x3E],
-  // b (98)
-  [0x40, 0x40, 0x7C, 0x42, 0x42, 0x42, 0x7C],
-  // c (99)
-  [0x00, 0x00, 0x3C, 0x42, 0x40, 0x42, 0x3C],
-  // d (100)
-  [0x02, 0x02, 0x3A, 0x46, 0x42, 0x42, 0x3E],
-  // e (101)
-  [0x00, 0x00, 0x3C, 0x42, 0x7E, 0x40, 0x3C],
-  // f (102)
-  [0x1C, 0x20, 0x20, 0x7C, 0x20, 0x20, 0x20],
-  // g (103)
-  [0x00, 0x00, 0x3E, 0x42, 0x42, 0x3E, 0x02, 0x3C], // note: 8 rows, we'll handle
-  // h (104)
-  [0x40, 0x40, 0x7C, 0x42, 0x42, 0x42, 0x42],
-  // i (105)
-  [0x10, 0x00, 0x30, 0x10, 0x10, 0x10, 0x38],
-  // j (106)
-  [0x08, 0x00, 0x18, 0x08, 0x08, 0x48, 0x30],
-  // k (107)
-  [0x40, 0x40, 0x44, 0x48, 0x70, 0x48, 0x44],
-  // l (108)
-  [0x30, 0x10, 0x10, 0x10, 0x10, 0x10, 0x38],
-  // m (109)
-  [0x00, 0x00, 0xAC, 0xD6, 0xD6, 0xD6, 0xD6],
-  // n (110)
-  [0x00, 0x00, 0x7C, 0x42, 0x42, 0x42, 0x42],
-  // o (111)
-  [0x00, 0x00, 0x3C, 0x42, 0x42, 0x42, 0x3C],
-  // p (112)
-  [0x00, 0x00, 0x7C, 0x42, 0x42, 0x7C, 0x40, 0x40], // 8 rows
-  // q (113)
-  [0x00, 0x00, 0x3E, 0x42, 0x42, 0x3E, 0x02, 0x02], // 8 rows
-  // r (114)
-  [0x00, 0x00, 0x7C, 0x42, 0x40, 0x40, 0x40],
-  // s (115)
-  [0x00, 0x00, 0x3C, 0x40, 0x3C, 0x02, 0x7C],
-  // t (116)
-  [0x10, 0x20, 0x7C, 0x20, 0x20, 0x24, 0x18],
-  // u (117)
-  [0x00, 0x00, 0x42, 0x42, 0x42, 0x46, 0x3A],
-  // v (118)
-  [0x00, 0x00, 0x42, 0x42, 0x42, 0x24, 0x18],
-  // w (119)
-  [0x00, 0x00, 0x42, 0x5A, 0x5A, 0x66, 0x24],
-  // x (120)
-  [0x00, 0x00, 0x42, 0x24, 0x18, 0x24, 0x42],
-  // y (121)
-  [0x00, 0x00, 0x42, 0x42, 0x46, 0x3E, 0x02, 0x3C], // 8 rows
-  // z (122)
-  [0x00, 0x00, 0x7E, 0x04, 0x08, 0x10, 0x7E],
-  // { (123)
-  [0x08, 0x10, 0x10, 0x20, 0x10, 0x10, 0x08],
-  // | (124)
-  [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10],
-  // } (125)
-  [0x20, 0x10, 0x10, 0x08, 0x10, 0x10, 0x20],
-  // ~ (126)
-  [0x00, 0x00, 0x28, 0x50, 0x00, 0x00, 0x00],
-];
-
-const FONT_WIDTH = 5;
-const FONT_HEIGHT = 7;
-
-class FontRenderer {
-  private canvas: Canvas;
-  private scale: number;
-  private bold: boolean;
-
-  constructor(canvas: Canvas, scale: number = 1, bold: boolean = false) {
-    this.canvas = canvas;
-    this.scale = scale;
-    this.bold = bold;
+function drawTextSingleLine(text: string, x: number, y: number, scale: number, r: number, g: number, b: number, bold = false): number {
+  let cursorX = x;
+  for (const ch of text) {
+    cursorX += drawChar(ch, cursorX, y, scale, r, g, b, bold) + Math.round(scale * 0.3);
   }
-
-  setScale(scale: number): void { this.scale = scale; }
-  setBold(bold: boolean): void { this.bold = bold; }
-
-  drawChar(ch: string, x: number, y: number, color: number): number {
-    const code = ch.charCodeAt(0);
-    if (code < 32 || code > 126) return this.scale * FONT_WIDTH;
-    const glyph = FONT_5x7[code - 32];
-    if (!glyph) return this.scale * FONT_WIDTH;
-
-    const charW = FONT_WIDTH * this.scale;
-    const charH = FONT_HEIGHT * this.scale;
-
-    for (let row = 0; row < FONT_HEIGHT; row++) {
-      const bits = glyph[row];
-      for (let col = 0; col < FONT_WIDTH; col++) {
-        if (bits & (0x80 >> col)) {
-          for (let sy = 0; sy < this.scale; sy++) {
-            for (let sx = 0; sx < this.scale; sx++) {
-              this.canvas.setPixel(x + col * this.scale + sx, y + row * this.scale + sy, color);
-            }
-          }
-          if (this.bold) {
-            // Draw one pixel to the right for bold effect
-            for (let sy = 0; sy < this.scale; sy++) {
-              for (let sx = 0; sx < this.scale; sx++) {
-                this.canvas.setPixel(x + col * this.scale + sx + 1, y + row * this.scale + sy, color);
-              }
-            }
-          }
-        }
-      }
-    }
-    return charW + (this.bold ? this.scale : 0);
-  }
-
-  drawText(text: string, x: number, y: number, color: number, maxWidth?: number): number {
-    let curX = x;
-    const words = text.split(' ');
-    let lineStart = x;
-
-    for (let i = 0; i < words.length; i++) {
-      const word = words[i];
-      const isLast = i === words.length - 1;
-      let wordWidth = 0;
-      for (const ch of word) {
-        wordWidth += this.drawChar(ch, 0, 0, color); // measure
-      }
-      if (!isLast) wordWidth += this.scale * FONT_WIDTH; // space
-
-      if (maxWidth && curX + wordWidth > x + maxWidth) {
-        // Word wrap
-        curX = x;
-        y += this.scale * (FONT_HEIGHT + 1);
-        if (curX !== x) continue; // re-evaluate same word
-      }
-
-      for (const ch of word) {
-        curX += this.drawChar(ch, curX, y, color);
-      }
-      if (!isLast) {
-        curX += this.scale * FONT_WIDTH;
-      }
-    }
-    return y + this.scale * FONT_HEIGHT;
-  }
-
-  measureText(text: string): { width: number; height: number } {
-    let width = 0;
-    let maxWidth = 0;
-    for (const ch of text) {
-      if (ch === '\n') {
-        maxWidth = Math.max(maxWidth, width);
-        width = 0;
-      } else {
-        width += this.drawChar(ch, 0, 0, 0);
-      }
-    }
-    maxWidth = Math.max(maxWidth, width);
-    return { width: maxWidth, height: this.scale * FONT_HEIGHT };
-  }
-
-  drawTextMultiline(text: string, x: number, y: number, color: number, maxWidth: number, lineHeight?: number): number {
-    const words = text.split(' ');
-    let curX = x;
-    let curY = y;
-    const lh = lineHeight || this.scale * (FONT_HEIGHT + 1);
-
-    for (let i = 0; i < words.length; i++) {
-      const word = words[i];
-      let wordWidth = 0;
-      for (const ch of word) {
-        wordWidth += this.drawChar(ch, 0, 0, color);
-      }
-      if (i < words.length - 1) wordWidth += this.scale * FONT_WIDTH;
-
-      if (curX + wordWidth > x + maxWidth) {
-        curX = x;
-        curY += lh;
-      }
-
-      for (const ch of word) {
-        curX += this.drawChar(ch, curX, curY, color);
-      }
-      if (i < words.length - 1) {
-        curX += this.scale * FONT_WIDTH;
-      }
-    }
-    return curY + lh;
-  }
+  return cursorX - x;
 }
 
-// ============================================================================
-// PNG Encoder (Manual)
-// ============================================================================
+function drawTextCentered(text: string, cx: number, y: number, scale: number, r: number, g: number, b: number, bold = false): void {
+  let totalWidth = 0;
+  for (const ch of text) totalWidth += drawChar(ch, 0, 0, scale, 0,0,0) + Math.round(scale * 0.3);
+  totalWidth -= Math.round(scale * 0.3);
+  drawTextSingleLine(text, cx - totalWidth / 2, y, scale, r, g, b, bold);
+}
 
-// CRC32 table
-const CRC_TABLE: number[] = [];
-for (let i = 0; i < 256; i++) {
-  let c = i;
-  for (let j = 0; j < 8; j++) {
-    c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+function measureText(text: string, scale: number): number {
+  let w = 0;
+  for (const ch of text) w += drawChar(ch, 0, 0, scale, 0,0,0) + Math.round(scale * 0.3);
+  return w - Math.round(scale * 0.3);
+}
+
+function wrapText(text: string, maxWidth: number, scale: number): string[] {
+  const words = text.split(' ');
+  const lines: string[] = [];
+  let current = '';
+  for (const word of words) {
+    const test = current + (current ? ' ' : '') + word;
+    if (measureText(test, scale) <= maxWidth) {
+      current = test;
+    } else {
+      if (current) lines.push(current);
+      current = word;
+    }
   }
-  CRC_TABLE[i] = c >>> 0;
+  if (current) lines.push(current);
+  return lines;
+}
+
+function drawWrappedText(text: string, x: number, y: number, maxWidth: number, scale: number, r: number, g: number, b: number, bold = false, lineGap = 1.2): number {
+  const lines = wrapText(text, maxWidth, scale);
+  const lineHeight = Math.round(8 * scale * lineGap);
+  for (let i = 0; i < lines.length; i++) {
+    drawTextSingleLine(lines[i], x, y + i * lineHeight, scale, r, g, b, bold);
+  }
+  return lines.length * lineHeight;
 }
 
 function crc32(data: Uint8Array): number {
-  let crc = 0xFFFFFFFF;
+  let crc = 0xffffffff;
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) {
+      c = (c & 1) ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[i] = c;
+  }
   for (let i = 0; i < data.length; i++) {
-    crc = CRC_TABLE[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);
+    crc = table[(crc ^ data[i]) & 0xff] ^ (crc >>> 8);
   }
-  return (crc ^ 0xFFFFFFFF) >>> 0;
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
-function writeUInt32BE(buf: Uint8Array, offset: number, value: number): void {
-  buf[offset] = (value >>> 24) & 0xFF;
-  buf[offset + 1] = (value >>> 16) & 0xFF;
-  buf[offset + 2] = (value >>> 8) & 0xFF;
-  buf[offset + 3] = value & 0xFF;
+function writePNGChunk(buf: Uint8Array, type: string, data: Uint8Array): Uint8Array {
+  const len = new Uint8Array(4);
+  len[0] = (data.length >>> 24) & 0xff;
+  len[1] = (data.length >>> 16) & 0xff;
+  len[2] = (data.length >>> 8) & 0xff;
+  len[3] = data.length & 0xff;
+  const typeArr = new Uint8Array(4);
+  for (let i = 0; i < 4; i++) typeArr[i] = type.charCodeAt(i);
+  const crcData = new Uint8Array(4 + data.length);
+  crcData.set(typeArr);
+  crcData.set(data, 4);
+  const crc = crc32(crcData);
+  const crcArr = new Uint8Array(4);
+  crcArr[0] = (crc >>> 24) & 0xff;
+  crcArr[1] = (crc >>> 16) & 0xff;
+  crcArr[2] = (crc >>> 8) & 0xff;
+  crcArr[3] = crc & 0xff;
+  const result = new Uint8Array(len.length + typeArr.length + data.length + crcArr.length);
+  result.set(len);
+  result.set(typeArr, len.length);
+  result.set(data, len.length + typeArr.length);
+  result.set(crcArr, len.length + typeArr.length + data.length);
+  return result;
 }
 
-function writeChunk(buf: Uint8Array, offset: number, type: string, data: Uint8Array): number {
-  writeUInt32BE(buf, offset, data.length);
-  buf[offset + 4] = type.charCodeAt(0);
-  buf[offset + 5] = type.charCodeAt(1);
-  buf[offset + 6] = type.charCodeAt(2);
-  buf[offset + 7] = type.charCodeAt(3);
-  buf.set(data, offset + 8);
-  const crc = crc32(new Uint8Array([...buf.slice(offset + 4, offset + 8), ...data]));
-  writeUInt32BE(buf, offset + 8 + data.length, crc);
-  return 12 + data.length;
-}
-
-function encodePNG(canvas: Canvas): Uint8Array {
-  const width = canvas.getWidth();
-  const height = canvas.getHeight();
-  const data = canvas.getData();
-
-  // Convert RGBA to RGB scanlines with filter byte (0 = none)
-  const scanlineWidth = width * 3 + 1;
-  const rawData = new Uint8Array(scanlineWidth * height);
-
+function encodePNG(pixels: Uint8Array, width: number, height: number): Uint8Array {
+  const raw = new Uint8Array(height * (1 + width * 3));
   for (let y = 0; y < height; y++) {
-    rawData[y * scanlineWidth] = 0; // filter type 0
+    raw[y * (1 + width * 3)] = 0;
     for (let x = 0; x < width; x++) {
-      const idx = (y * width + x) * 4;
-      const dst = y * scanlineWidth + 1 + x * 3;
-      rawData[dst] = data[idx];
-      rawData[dst + 1] = data[idx + 1];
-      rawData[dst + 2] = data[idx + 2];
+      const i = (y * width + x) * 3;
+      const dst = y * (1 + width * 3) + 1 + x * 3;
+      raw[dst] = pixels[i];
+      raw[dst + 1] = pixels[i + 1];
+      raw[dst + 2] = pixels[i + 2];
     }
   }
-
-  // Compress with zlib
-  const compressed = zlib.deflateSync(rawData, { level: 9 });
-
-  // PNG signature
-  const signature = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-
-  // IHDR chunk
-  const ihdrData = new Uint8Array(13);
-  writeUInt32BE(ihdrData, 0, width);
-  writeUInt32BE(ihdrData, 4, height);
-  ihdrData[8] = 8;  // bit depth
-  ihdrData[9] = 2;  // color type: truecolor (RGB)
-  ihdrData[10] = 0; // compression
-  ihdrData[11] = 0; // filter
-  ihdrData[12] = 0; // interlace
-
-  // IDAT chunk
-  const idatData = compressed;
-
-  // IEND chunk
-  const iendData = new Uint8Array(0);
-
-  // Calculate total size
-  const ihdrSize = 12 + 13;
-  const idatSize = 12 + idatData.length;
-  const iendSize = 12 + 0;
-  const totalSize = 8 + ihdrSize + idatSize + iendSize;
-
-  const png = new Uint8Array(totalSize);
-  let offset = 0;
-
-  // Signature
-  png.set(signature, offset);
-  offset += 8;
-
-  // IHDR
-  offset += writeChunk(png, offset, 'IHDR', ihdrData);
-
-  // IDAT
-  offset += writeChunk(png, offset, 'IDAT', idatData);
-
-  // IEND
-  offset += writeChunk(png, offset, 'IEND', iendData);
-
-  return png;
-}
-
-// ============================================================================
-// Main Drawing Logic
-// ============================================================================
-
-function loadNewsData(): NewsItem[] {
-  const data = fs.readFileSync(path.join(process.cwd(), 'news-data.json'), 'utf-8');
-  return JSON.parse(data);
-}
-
-function drawMasthead(canvas: Canvas): void {
-  // Background
-  canvas.fillRect(0, 0, WIDTH, 106, COLORS.mastheadBg);
-
-  // Red accent line at bottom
-  canvas.fillRect(0, 106, WIDTH, 3, COLORS.accentRed);
-
-  // Date badge (left)
-  const badgeX = 24;
-  const badgeY = 12;
-  // Red "NOV"
-  const font = new FontRenderer(canvas, 2, true);
-  font.drawText('NOV', badgeX, badgeY, COLORS.accentRed);
-  // Large "19"
-  const fontBig = new FontRenderer(canvas, 5, true);
-  fontBig.drawText('19', badgeX, badgeY + 22, COLORS.accentRed);
-  // "THU 26"
-  const fontSmall = new FontRenderer(canvas, 1.5, true);
-  fontSmall.drawText('THU 26', badgeX, badgeY + 62, COLORS.accentRed);
-
-  // Title (center)
-  const titleFont = new FontRenderer(canvas, 3, true);
-  const title = 'THURSDAY 19 NOVEMBER 2026';
-  const titleWidth = title.length * 5 * 3;
-  titleFont.drawText(title, (WIDTH - titleWidth) / 2, 20, COLORS.white);
-
-  // Subtitle
-  const subFont = new FontRenderer(canvas, 1.5, false);
-  const subTitle = "THE WORLD'S NEWS IN ONE IMAGE";
-  const subWidth = subTitle.length * 5 * 1.5;
-  subFont.drawText(subTitle, (WIDTH - subWidth) / 2, 56, COLORS.cream);
-
-  // Right side stats
-  const rightFont = new FontRenderer(canvas, 1.2, false);
-  const stats = ['16 STORIES', '7 REGIONS', 'ONE PAGE'];
-  for (let i = 0; i < stats.length; i++) {
-    const str = stats[i];
-    const w = str.length * 5 * 1.2;
-    rightFont.drawText(str, WIDTH - w - 24, 20 + i * 22, COLORS.cream);
-  }
-}
-
-function drawRegionDistribution(canvas: Canvas): void {
-  const y = 106;
-  const h = 24;
-  let x = 0;
-  const totalStories = 16;
-
-  for (const region of REGIONS) {
-    const w = Math.round((region.count / totalStories) * WIDTH);
-    canvas.fillRect(x, y, w, h, region.color);
-    // Label
-    const font = new FontRenderer(canvas, 1, true);
-    const label = `${region.shortName} ${region.count}`;
-    const labelW = label.length * 5;
-    const labelX = x + Math.max(4, (w - labelW) / 2);
-    font.drawText(label, labelX, y + 6, COLORS.white);
-    x += w;
-  }
-}
-
-function drawDayInNumbers(canvas: Canvas): void {
-  const y = 130;
-  const h = 52;
-  canvas.fillRect(0, y, WIDTH, h, COLORS.distBg);
-
-  const fontLabel = new FontRenderer(canvas, 1, true);
-  const fontValue = new FontRenderer(canvas, 1.8, true);
-  const fontDetail = new FontRenderer(canvas, 0.9, false);
-
-  const itemWidth = WIDTH / 5;
-
-  for (let i = 0; i < KPI_ITEMS.length; i++) {
-    const item = KPI_ITEMS[i];
-    const x = i * itemWidth + 20;
-
-    // Colored dot
-    canvas.fillRect(x, y + 12, 8, 8, item.regionColor);
-
-    // Value
-    fontValue.drawText(item.label, x + 14, y + 6, item.regionColor);
-    // Detail
-    fontDetail.drawText(item.detail, x + 14, y + 28, COLORS.mutedInk);
-  }
-}
-
-function drawHeroCard(canvas: Canvas, index: number, story: NewsItem, regionColor: number, x: number, y: number): void {
-  const cardW = 320;
-  const cardH = 214;
-  const illusH = 72;
-
-  // Shadow
-  canvas.fillRect(x + 3, y + 3, cardW, cardH, COLORS.cardShadow);
-  // Card background
-  canvas.fillRect(x, y, cardW, cardH, COLORS.cardBg);
-  // Border
-  canvas.drawRect(x, y, cardW, cardH, COLORS.cardBorder);
-
-  // Illustration area
-  const illusY = y + 4;
-  const illusX = x + 4;
-  const illusW = cardW - 8;
-
-  drawHeroIllustration(canvas, index, illusX, illusY, illusW, illusH, regionColor);
-
-  // Content below illustration
-  const contentY = y + illusH + 8;
-
-  // Number + region
-  const fontNum = new FontRenderer(canvas, 1.2, true);
-  const fontRegion = new FontRenderer(canvas, 1, true);
-  fontNum.drawText(`${index + 1}.`, illusX, contentY, COLORS.titleInk);
-  fontRegion.drawText(REGIONS.find(r => r.color === regionColor)?.shortName || '', illusX + 24, contentY, regionColor);
-
-  // Topic badge
-  const badgeFont = new FontRenderer(canvas, 0.85, true);
-  const badgeText = TOPIC_BADGES[index];
-  const badgeW = badgeText.length * 5 * 0.85 + 8;
-  canvas.fillRect(illusX, contentY + 18, badgeW, 14, regionColor);
-  badgeFont.drawText(badgeText, illusX + 4, contentY + 20, COLORS.white);
-
-  // Title
-  const titleFont = new FontRenderer(canvas, 1.6, true);
-  titleFont.drawTextMultiline(story.title, illusX, contentY + 36, COLORS.titleInk, illusW - 4, 22);
-
-  // Summary
-  const bodyFont = new FontRenderer(canvas, 1.1, false);
-  bodyFont.drawTextMultiline(story.summary, illusX, contentY + 80, COLORS.bodyInk, illusW - 4, 16);
-}
-
-function drawHeroIllustration(canvas: Canvas, index: number, x: number, y: number, w: number, h: number, regionColor: number): void {
-  const cx = x + w / 2;
-  const cy = y + h / 2;
-
-  switch (index) {
-    case 0: // Shenzhen Summit - three flags + building silhouette
-      drawSummitIllustration(canvas, x, y, w, h);
-      break;
-    case 1: // Riyadh missile interception
-      drawRiyadhIllustration(canvas, x, y, w, h);
-      break;
-    case 2: // Voyager 1
-      drawVoyagerIllustration(canvas, x, y, w, h);
-      break;
-  }
-}
-
-function drawSummitIllustration(canvas: Canvas, x: number, y: number, w: number, h: number): void {
-  const cx = x + w / 2;
-  // Building silhouette
-  const bx = x + 20;
-  const by = y + h - 40;
-  canvas.fillRect(bx, by - 30, w - 40, 30, COLORS.mutedInk);
-  // Windows
-  for (let i = 0; i < 5; i++) {
-    canvas.fillRect(bx + 10 + i * 40, by - 25, 8, 20, COLORS.cream);
-  }
-  // Three flags
-  const flagColors = [COLORS.asiaPacific, COLORS.world, 0xFFFFFF]; // China, US, Russia (simplified)
-  const flagX = [cx - 40, cx, cx + 40];
-  for (let i = 0; i < 3; i++) {
-    const fx = flagX[i];
-    // Pole
-    canvas.drawLine(fx, y + 10, fx, by - 5, COLORS.mutedInk);
-    // Flag
-    canvas.fillRect(fx, y + 10, 25, 15, flagColors[i]);
-    if (i === 2) {
-      // Russia flag stripes
-      canvas.fillRect(fx, y + 10, 25, 5, 0xFFFFFF);
-      canvas.fillRect(fx, y + 15, 25, 5, 0x0033A0);
-      canvas.fillRect(fx, y + 20, 25, 5, 0xDA291C);
-    }
-  }
-}
-
-function drawRiyadhIllustration(canvas: Canvas, x: number, y: number, w: number, h: number): void {
-  // Tall tower
-  const tx = x + w / 2;
-  const ty = y + h - 10;
-  // Tower body
-  canvas.fillRect(tx - 8, y + 15, 16, h - 30, 0x888888);
-  // Tower top
-  canvas.fillPolygon([
-    { x: tx - 12, y: y + 15 },
-    { x: tx, y: y + 5 },
-    { x: tx + 12, y: y + 15 },
-  ], 0xAAAAAA);
-
-  // Missile trail (red arc from top-right)
-  canvas.drawArc(x + w - 10, y + 10, 50, Math.PI * 0.8, Math.PI * 1.4, COLORS.accentRed, 3);
-  // Interception arc (cyan)
-  canvas.drawArc(tx, ty, 35, Math.PI * 1.2, Math.PI * 1.8, 0x00FFFF, 3);
-  // Flash
-  canvas.drawCircle(tx - 15, y + 25, 8, 0xFFFF00, true);
-  canvas.drawCircle(tx - 15, y + 25, 4, 0xFFFFFF, true);
-}
-
-function drawVoyagerIllustration(canvas: Canvas, x: number, y: number, w: number, h: number): void {
-  // Starfield
-  for (let i = 0; i < 30; i++) {
-    const sx = x + Math.random() * w;
-    const sy = y + Math.random() * h;
-    canvas.setPixel(Math.round(sx), Math.round(sy), COLORS.white);
-  }
-  // Earth (small blue dot)
-  canvas.drawCircle(x + 30, y + h - 30, 6, 0x0066CC, true);
-  canvas.drawCircle(x + 30, y + h - 30, 3, 0x44AAFF, true);
-
-  // Radio signal arc
-  canvas.drawArc(x + 30, y + h - 30, 40, -Math.PI * 0.3, Math.PI * 0.3, 0x00FFFF, 2);
-  canvas.drawArc(x + 30, y + h - 30, 60, -Math.PI * 0.3, Math.PI * 0.3, 0x00AAAA, 1);
-
-  // Voyager spacecraft (parabolic dish + boom)
-  const vx = x + w - 40;
-  const vy = y + 30;
-  // Dish
-  canvas.drawArc(vx, vy, 15, -Math.PI * 0.6, Math.PI * 0.6, 0xCCCCCC, 2);
-  // Boom
-  canvas.drawLine(vx, vy, vx - 35, vy, 0xCCCCCC);
-  // Body
-  canvas.fillRect(vx - 35, vy - 4, 20, 8, 0x888888);
-  // RTG
-  canvas.fillRect(vx - 40, vy - 2, 8, 12, 0x666666);
-}
-
-function drawGridCards(canvas: Canvas, stories: NewsItem[], startIndex: number): void {
-  const startY = 412;
-  const cardW = 320;
-  const cardH = 103;
-  const gapX = 12;
-  const gapY = 8;
-  const cols = 3;
-  const rows = 4;
-
-  for (let row = 0; row < rows; row++) {
-    for (let col = 0; col < cols; col++) {
-      const idx = startIndex + row * cols + col;
-      if (idx >= stories.length) break;
-
-      const x = 24 + col * (cardW + gapX);
-      const y = startY + row * (cardH + gapY);
-      const story = stories[idx];
-      const region = REGIONS.find(r => r.name === story.region);
-      const regionColor = region?.color || COLORS.world;
-
-      drawGridCard(canvas, idx, story, regionColor, x, y, cardW, cardH);
-    }
-  }
-}
-
-function drawGridCard(canvas: Canvas, index: number, story: NewsItem, regionColor: number, x: number, y: number, w: number, h: number): void {
-  // Shadow
-  canvas.fillRect(x + 2, y + 2, w, h, COLORS.cardShadow);
-  // Background
-  canvas.fillRect(x, y, w, h, COLORS.cardBg);
-  // Border
-  canvas.drawRect(x, y, w, h, COLORS.cardBorder);
-
-  // Region color strip (left)
-  canvas.fillRect(x, y, 6, h, regionColor);
-
-  const contentX = x + 14;
-  const contentY = y + 6;
-  const contentW = w - 20;
-
-  // Number + region
-  const fontNum = new FontRenderer(canvas, 1.1, true);
-  const fontRegion = new FontRenderer(canvas, 0.9, true);
-  fontNum.drawText(`${index + 1}.`, contentX, contentY, COLORS.titleInk);
-  const region = REGIONS.find(r => r.color === regionColor);
-  fontRegion.drawText(region?.shortName || '', contentX + 22, contentY, regionColor);
-
-  // Topic badge
-  const badgeFont = new FontRenderer(canvas, 0.75, true);
-  const badgeText = TOPIC_BADGES[index];
-  const badgeW = badgeText.length * 5 * 0.75 + 6;
-  canvas.fillRect(contentX, contentY + 16, badgeW, 12, regionColor);
-  badgeFont.drawText(badgeText, contentX + 3, contentY + 17, COLORS.white);
-
-  // Title (max 2 lines)
-  const titleFont = new FontRenderer(canvas, 1.3, true);
-  titleFont.drawTextMultiline(story.title, contentX, contentY + 32, COLORS.titleInk, contentW, 18);
-
-  // Summary (max 2-3 lines)
-  const bodyFont = new FontRenderer(canvas, 0.95, false);
-  bodyFont.drawTextMultiline(story.summary, contentX, contentY + 62, COLORS.bodyInk, contentW, 14);
-
-  // Micro-chart for some cards (near badge)
-  if ([4, 7, 8, 10, 12, 14].includes(index)) {
-    drawMicroChart(canvas, x + w - 50, y + 8, 40, 30, index);
-  }
-}
-
-function drawMicroChart(canvas: Canvas, x: number, y: number, w: number, h: number, type: number): void {
-  const ctx = canvas;
-  switch (type) {
-    case 4: // $20M - rising line
-      ctx.drawLine(x, y + h, x + w, y, COLORS.asiaPacific);
-      ctx.drawLine(x + w, y, x + w, y + h, COLORS.asiaPacific);
-      break;
-    case 7: // 1,000+ - bars
-      for (let i = 0; i < 4; i++) {
-        const bh = 5 + i * 6;
-        ctx.fillRect(x + i * 10, y + h - bh, 6, bh, COLORS.europe);
-      }
-      break;
-    case 8: // Kerch - pulse
-      ctx.drawLine(x, y + h/2, x + w, y + h/2, COLORS.europe);
-      for (let i = 0; i < 3; i++) {
-        ctx.drawLine(x + i * 13, y + h/2 - 5, x + i * 13, y + h/2 + 5, COLORS.europe);
-      }
-      break;
-    case 10: // Cyber - jagged
-      ctx.drawLine(x, y + h, x + w/3, y, COLORS.middleEast);
-      ctx.drawLine(x + w/3, y, x + 2*w/3, y + h, COLORS.middleEast);
-      ctx.drawLine(x + 2*w/3, y + h, x + w, y, COLORS.middleEast);
-      break;
-    case 12: // Strike - flat then up
-      ctx.drawLine(x, y + h, x + w/2, y + h, COLORS.americas);
-      ctx.drawLine(x + w/2, y + h, x + w, y, COLORS.americas);
-      break;
-    case 14: // Envoy - dots
-      for (let i = 0; i < 5; i++) {
-        ctx.drawCircle(x + i * 8 + 4, y + h/2, 2, COLORS.africa, true);
-      }
-      break;
-  }
-}
-
-function drawWorldMapPanel(canvas: Canvas): void {
-  const panelX = 24;
-  const panelY = 856;
-  const panelW = 652;
-  const panelH = 104;
-
-  // Panel background
-  canvas.fillRect(panelX, panelY, panelW, panelH, COLORS.cardBg);
-  canvas.drawRect(panelX, panelY, panelW, panelH, COLORS.cardBorder);
-
-  // Title
-  const font = new FontRenderer(canvas, 1.2, true);
-  font.drawText('WHERE IT HAPPENED', panelX + 12, panelY + 8, COLORS.titleInk);
-
-  // Simplified world map - continents as polygons
-  const mapX = panelX + 12;
-  const mapY = panelY + 28;
-  const mapW = panelW - 24;
-  const mapH = panelH - 40;
-
-  // Ocean background
-  canvas.fillRect(mapX, mapY, mapW, mapH, COLORS.ocean);
-
-  // Continents (simplified polygons)
-  // North America
-  drawContinent(canvas, [
-    { x: mapX + 20, y: mapY + 30 },
-    { x: mapX + 100, y: mapY + 20 },
-    { x: mapX + 120, y: mapY + 60 },
-    { x: mapX + 80, y: mapY + 80 },
-    { x: mapX + 30, y: mapY + 70 },
-  ], COLORS.land);
-
-  // South America
-  drawContinent(canvas, [
-    { x: mapX + 50, y: mapY + 80 },
-    { x: mapX + 80, y: mapY + 100 },
-    { x: mapX + 70, y: mapY + 140 },
-    { x: mapX + 40, y: mapY + 130 },
-  ], COLORS.land);
-
-  // Europe
-  drawContinent(canvas, [
-    { x: mapX + 160, y: mapY + 20 },
-    { x: mapX + 220, y: mapY + 15 },
-    { x: mapX + 230, y: mapY + 50 },
-    { x: mapX + 170, y: mapY + 55 },
-  ], COLORS.land);
-
-  // Africa
-  drawContinent(canvas, [
-    { x: mapX + 180, y: mapY + 50 },
-    { x: mapX + 220, y: mapY + 45 },
-    { x: mapX + 210, y: mapY + 110 },
-    { x: mapX + 170, y: mapY + 115 },
-  ], COLORS.land);
-
-  // Asia
-  drawContinent(canvas, [
-    { x: mapX + 220, y: mapY + 15 },
-    { x: mapX + 300, y: mapY + 10 },
-    { x: mapX + 310, y: mapY + 60 },
-    { x: mapX + 280, y: mapY + 70 },
-    { x: mapX + 230, y: mapY + 50 },
-  ], COLORS.land);
-
-  // Australia
-  drawContinent(canvas, [
-    { x: mapX + 290, y: mapY + 90 },
-    { x: mapX + 320, y: mapY + 85 },
-    { x: mapX + 315, y: mapY + 120 },
-    { x: mapX + 285, y: mapY + 125 },
-  ], COLORS.land);
-
-  // Antarctica
-  canvas.fillRect(mapX + 10, mapY + 130, mapW - 20, 10, COLORS.land);
-
-  // Story markers (1-16)
-  const markerPositions: Point[] = [
-    { x: mapX + 250, y: mapY + 35 }, // 1 Shenzhen
-    { x: mapX + 200, y: mapY + 45 }, // 2 Riyadh
-    { x: mapX + 350, y: mapY + 10 }, // 3 Voyager (special)
-    { x: mapX + 230, y: mapY + 40 }, // 4 Myanmar
-    { x: mapX + 250, y: mapY + 35 }, // 5 Shenzhen
-    { x: mapX + 300, y: mapY + 100 }, // 6 Tonga
-    { x: mapX + 270, y: mapY + 25 }, // 7 North Korea
-    { x: mapX + 180, y: mapY + 30 }, // 8 Berlin
-    { x: mapX + 220, y: mapY + 40 }, // 9 Kerch
-    { x: mapX + 185, y: mapY + 25 }, // 10 Brussels
-    { x: mapX + 205, y: mapY + 45 }, // 11 Gulf
-    { x: mapX + 60, y: mapY + 85 }, // 12 Guatemala
-    { x: mapX + 55, y: mapY + 110 }, // 13 Colombia
-    { x: mapX + 180, y: mapY + 85 }, // 14 Senegal
-    { x: mapX + 195, y: mapY + 75 }, // 15 Somalia
-    { x: mapX + 100, mapY: mapY + 135 }, // 16 Antarctica
+  const compressed = deflateSync(raw, { level: 9 });
+  const ihdr = new Uint8Array(13);
+  const view = new DataView(ihdr.buffer);
+  view.setUint32(0, width);
+  view.setUint32(4, height);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  const png = new Uint8Array(8 + 0);
+  const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const chunks = [
+    writePNGChunk(new Uint8Array(0), 'IHDR', ihdr),
+    writePNGChunk(new Uint8Array(0), 'IDAT', compressed),
+    writePNGChunk(new Uint8Array(0), 'IEND', new Uint8Array(0))
   ];
+  let totalLen = 8;
+  for (const c of chunks) totalLen += c.length;
+  const out = new Uint8Array(totalLen);
+  out.set(sig);
+  let pos = 8;
+  for (const c of chunks) {
+    out.set(c, pos);
+    pos += c.length;
+  }
+  return out;
+}
 
-  for (let i = 0; i < markerPositions.length; i++) {
-    const pos = markerPositions[i];
-    if (i === 2) {
-      // Special Voyager label
-      const font = new FontRenderer(canvas, 0.8, true);
-      font.drawText('3->VOYAGER', mapX + mapW - 80, mapY + 4, COLORS.science);
-    } else {
-      const story = REGIONS.find(r => r.name === (i < 16 ? ['World','Middle East','Science','World','Asia-Pacific','Asia-Pacific','Asia-Pacific','Europe','Europe','Europe','Middle East','Americas','Americas','Africa','Africa','Science'][i] : 'World'));
-      const color = story?.color || COLORS.world;
-      canvas.drawCircle(pos.x, pos.y, 5, color, true);
-      canvas.drawCircle(pos.x, pos.y, 2, COLORS.white, true);
-      // Number
-      const numFont = new FontRenderer(canvas, 0.6, true);
-      numFont.drawText(`${i + 1}`, pos.x - 2, pos.y - 8, color);
+interface Story {
+  region: string;
+  title: string;
+  summary: string;
+  source: string;
+}
+
+interface KPI {
+  value: string;
+  label: string;
+}
+
+interface Pin {
+  id: number;
+  lat: number;
+  lon: number;
+  name: string;
+  special?: boolean;
+}
+
+const data = JSON.parse(readFileSync('news-data.json', 'utf-8')) as {
+  stories: Story[];
+  kpi: KPI[];
+  pins: Pin[];
+};
+
+const stories = data.stories;
+const kpis = data.kpi;
+const pins = data.pins;
+
+const REGION_COLORS: Record<string, [number, number, number]> = {
+  'World': [220, 60, 60],
+  'Asia-Pacific': [60, 180, 60],
+  'Europe': [60, 100, 220],
+  'Middle East': [220, 160, 40],
+  'Americas': [180, 60, 200],
+  'Africa': [240, 120, 30],
+  'Science': [80, 200, 220],
+};
+
+const REGION_ORDER = ['World', 'Asia-Pacific', 'Europe', 'Middle East', 'Americas', 'Africa', 'Science'];
+
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace('#', '');
+  return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+}
+
+const MASTHEAD_BG = [20, 28, 36];
+const CRIMSON = [200, 30, 40];
+const GOLD = [230, 180, 40];
+const WHITE = [255, 255, 255];
+const CREAM = [245, 235, 215];
+const NEWSPRINT = [244, 239, 228];
+const CARD_WHITE = [255, 255, 255];
+const DARK_TEXT = [30, 30, 35];
+const MID_TEXT = [80, 80, 90];
+const LIGHT_GRAY = [230, 230, 235];
+const BLACK = [0, 0, 0];
+
+function drawRoundedRect(x: number, y: number, w: number, h: number, r: number, cr: number, cg: number, cb: number): void {
+  for (let yy = y; yy < y + h; yy++) {
+    for (let xx = x; xx < x + w; xx++) {
+      let dx = 0, dy = 0;
+      if (xx < x + r) dx = x + r - xx;
+      else if (xx >= x + w - r) dx = xx - (x + w - r);
+      if (yy < y + r) dy = y + r - yy;
+      else if (yy >= y + h - r) dy = yy - (y + h - r);
+      if (dx*dx + dy*dy <= r*r) setPixel(xx, yy, cr, cg, cb);
     }
   }
-
-  // Story 16 card on the right
-  const cardX = panelX + panelW + 12;
-  const cardY = panelY;
-  const cardW = WIDTH - cardX - 24;
-  const cardH = panelH;
-
-  const story16 = stories[15];
-  const region16 = REGIONS.find(r => r.name === story16.region);
-  drawGridCard(canvas, 15, story16, region16?.color || COLORS.science, cardX, cardY, cardW, cardH);
 }
 
-function drawContinent(canvas: Canvas, points: Point[], color: number): void {
-  canvas.fillPolygon(points, color);
+function drawShadow(x: number, y: number, w: number, h: number, radius: number): void {
+  for (let i = 0; i < 8; i++) {
+    const a = 30 - i * 3;
+    const offset = i + 2;
+    drawRoundedRect(x + offset, y + offset, w, h, radius, 0, 0, 0);
+  }
 }
 
-function drawFooter(canvas: Canvas): void {
-  const y = 968;
-  const h = 56;
+let y = 0;
 
-  // Separator line
-  canvas.fillRect(24, y, WIDTH - 48, 1, COLORS.footerLine);
+const MASTHEAD_H = Math.round(HEIGHT * 0.12);
+fillRect(0, 0, WIDTH, MASTHEAD_H, ...MASTHEAD_BG);
 
-  // Region color legend
-  const legendY = y + 12;
-  let legendX = (WIDTH - (REGIONS.length * 100)) / 2;
+const badgeSize = Math.round(MASTHEAD_H * 0.85);
+const badgeX = 40;
+const badgeY = Math.round((MASTHEAD_H - badgeSize) / 2);
+drawRoundedRect(badgeX, badgeY, badgeSize, badgeSize, 8, ...CRIMSON);
 
-  const font = new FontRenderer(canvas, 0.9, false);
+drawTextCentered('NOV', badgeX + badgeSize/2, badgeY + 8, 1.1, ...WHITE, true);
+drawTextCentered('19', badgeX + badgeSize/2, badgeY + badgeSize/2 - 12, 3.2, ...WHITE, true);
+drawTextCentered('THU', badgeX + badgeSize/2, badgeY + badgeSize - 26, 0.9, ...WHITE);
+drawTextCentered('2026', badgeX + badgeSize/2, badgeY + badgeSize - 16, 0.7, ...WHITE);
 
-  for (const region of REGIONS) {
-    // Color square
-    canvas.fillRect(legendX, legendY, 12, 12, region.color);
-    // Label
-    font.drawText(region.shortName, legendX + 16, legendY + 2, COLORS.mutedInk);
-    legendX += 100;
+const kickerX = badgeX + badgeSize + 20;
+drawTextSingleLine('THE DAY IN WORLD NEWS', kickerX, badgeY + 10, 0.9, ...GOLD, true);
+
+const headlineY = badgeY + 14;
+drawTextSingleLine('THURSDAY 19 NOVEMBER 2026', kickerX, headlineY, 1.8, ...WHITE, true);
+drawTextSingleLine('THE WORLD\'S NEWS IN ONE IMAGE', kickerX, headlineY + 30, 0.85, ...CREAM, false);
+
+const statsX = WIDTH - 40;
+const stats = ['16 STORIES', '7 REGIONS', 'ONE PAGE'];
+let statsWidth = 0;
+for (const s of stats) statsWidth = Math.max(statsWidth, measureText(s, 0.75));
+let statsY = badgeY + badgeSize - 10;
+for (let i = stats.length - 1; i >= 0; i--) {
+  drawTextSingleLine(stats[i], statsX - statsWidth, statsY, 0.75, ...WHITE, true);
+  statsY -= 20;
+}
+
+y = MASTHEAD_H + 4;
+
+const REGION_COUNTS: Record<string, number> = {};
+for (const s of stories) REGION_COUNTS[s.region] = (REGION_COUNTS[s.region] || 0) + 1;
+
+const barHeight = 8;
+const barY = y;
+let barX = 40;
+const totalStories = stories.length;
+for (const region of REGION_ORDER) {
+  const count = REGION_COUNTS[region] || 0;
+  const w = Math.round((count / totalStories) * (WIDTH - 80));
+  if (w > 0) {
+    fillRect(barX, barY, w, barHeight, ...REGION_COLORS[region]);
+  }
+  barX += w;
+}
+y = barY + barHeight + 12;
+
+const kpiStripY = y;
+const kpiStripH = 56;
+fillRect(0, kpiStripY, WIDTH, kpiStripH, 18, 24, 32);
+drawTextCentered('THE DAY IN NUMBERS', WIDTH/2, kpiStripY + 8, 0.9, ...GOLD, true);
+const kpiStartX = 80;
+const kpiGap = (WIDTH - 160) / (kpis.length - 1);
+for (let i = 0; i < kpis.length; i++) {
+  const kx = Math.round(kpiStartX + i * kpiGap);
+  drawTextCentered(kpis[i].value, kx, kpiStripY + 20, 1.6, ...WHITE, true);
+  drawTextCentered(kpis[i].label, kx, kpiStripY + 42, 0.6, ...LIGHT_GRAY, false);
+}
+y = kpiStripY + kpiStripH + 8;
+
+const heroCards = [
+  { story: stories[0], pin: 1, illustration: 'summit' },
+  { story: stories[1], pin: 2, illustration: 'intercept' },
+  { story: stories[2], pin: 3, illustration: 'voyager' },
+];
+
+const heroCardW = Math.round((WIDTH - 100) / 3);
+const heroCardH = 260;
+const heroStartX = 40;
+const heroIllustH = 130;
+
+for (let i = 0; i < 3; i++) {
+  const hx = heroStartX + i * (heroCardW + 10);
+  const hy = y;
+  const card = heroCards[i];
+  const [rr, rg, rb] = REGION_COLORS[card.story.region];
+
+  drawShadow(hx, hy, heroCardW, heroCardH, 8);
+  drawRoundedRect(hx, hy, heroCardW, heroCardH, 8, ...CARD_WHITE);
+
+  fillRect(hx, hy, 6, heroCardH, rr, rg, rb);
+
+  const illustY = hy + 12;
+  const illustX = hx + 12;
+  const illustW = heroCardW - 24;
+
+  if (card.illustration === 'summit') {
+    const skyH = 60;
+    fillRect(illustX, illustY, illustW, skyH, 25, 40, 60);
+    const groundY = illustY + skyH;
+    fillRect(illustX, groundY, illustW, heroIllustH - skyH, 35, 50, 70);
+
+    const flagW = 16, flagH = 10;
+    const poleH = 50;
+    const flagColors = [
+      [[255,255,255],[200,30,40],[255,255,255]],
+      [[200,30,40],[255,255,255],[255,200,0]],
+      [[255,255,255],[0,50,160],[255,255,255]]
+    ];
+    for (let fi = 0; fi < 3; fi++) {
+      const fx = illustX + 20 + fi * (flagW + 30);
+      drawLine(fx + flagW/2, groundY, fx + flagW/2, groundY - poleH, 80, 80, 80, 2);
+      for (let fy = 0; fy < 3; fy++) {
+        fillRect(fx, groundY - poleH + fy * flagH, flagW, flagH, ...flagColors[fi][fy]);
+      }
+    }
+
+    const podiumX = illustX + illustW - 80;
+    const podiumY = groundY;
+    fillRect(podiumX, podiumY - 40, 60, 40, 60, 50, 40);
+    fillRect(podiumX + 5, podiumY - 60, 50, 20, 50, 40, 30);
+    fillRect(podiumX - 10, podiumY - 30, 30, 30, 70, 60, 50);
+    fillRect(podiumX + 60, podiumY - 30, 30, 30, 70, 60, 50);
+
+    for (let bx = 0; bx < illustW; bx += 8) {
+      const bh = 30 + (bx % 3) * 15;
+      fillRect(illustX + bx, groundY - bh, 6, bh, 40, 55, 75);
+    }
+  } else if (card.illustration === 'intercept') {
+    fillRect(illustX, illustY, illustW, heroIllustH, 15, 15, 30);
+    for (let s = 0; s < 80; s++) {
+      const sx = illustX + Math.floor(Math.random() * illustW);
+      const sy = illustY + Math.floor(Math.random() * 60);
+      setPixel(sx, sy, 255, 255, 255);
+    }
+    const towerX = illustX + 40;
+    const towerBaseY = illustY + heroIllustH;
+    fillRect(towerX, towerBaseY - 100, 25, 100, 50, 50, 60);
+    fillRect(towerX - 5, towerBaseY - 110, 35, 10, 60, 60, 70);
+
+    const missileX = illustX + illustW - 40;
+    const missileY = illustY + 30;
+    drawAALine(missileX, missileY, towerX + 12, towerBaseY - 50, 255, 80, 40, 3);
+    drawCircle(towerX + 12, towerBaseY - 50, 12, 0, 200, 255, false);
+    drawCircle(towerX + 12, towerBaseY - 50, 8, 0, 255, 255, true);
+
+    drawAALine(towerX + 12, towerBaseY - 100, missileX - 40, missileY + 20, 0, 220, 255, 2);
+  } else if (card.illustration === 'voyager') {
+    fillRect(illustX, illustY, illustW, heroIllustH, 5, 5, 15);
+    for (let s = 0; s < 200; s++) {
+      const sx = illustX + Math.floor(Math.random() * illustW);
+      const sy = illustY + Math.floor(Math.random() * heroIllustH);
+      const brightness = 180 + Math.floor(Math.random() * 75);
+      setPixel(sx, sy, brightness, brightness, brightness);
+    }
+
+    const probeX = illustX + 40;
+    const probeY = illustY + heroIllustH / 2;
+    drawPolygon([
+      [probeX, probeY - 20],
+      [probeX + 35, probeY],
+      [probeX, probeY + 20],
+      [probeX + 10, probeY]
+    ], 200, 190, 170, true);
+    drawCircle(probeX + 45, probeY, 4, 255, 215, 0, true);
+    drawAALine(probeX + 45, probeY, probeX + 45 + 50, probeY - 30, 255, 215, 0, 2);
+    drawAALine(probeX + 45, probeY, probeX + 45 + 50, probeY + 30, 255, 215, 0, 2);
+
+    const earthX = illustX + illustW - 50;
+    const earthY = illustY + heroIllustH / 2;
+    drawCircle(earthX, earthY, 18, 30, 100, 200, true);
+    drawCircle(earthX - 5, earthY - 5, 6, 100, 180, 255, true);
+
+    drawTextSingleLine('1 LIGHT-DAY', illustX + illustW/2 - 40, illustY + heroIllustH - 18, 0.7, 255, 215, 0, true);
   }
 
-  // Credit line
-  const creditFont = new FontRenderer(canvas, 0.8, false);
-  const credit = 'THURSDAY 19 NOVEMBER 2026 | WORLD NEWS SUMMARY | 16 VERIFIED STORIES';
-  const creditW = credit.length * 5 * 0.8;
-  creditFont.drawText(credit, (WIDTH - creditW) / 2, y + 36, COLORS.mutedInk);
+  const textY = illustY + heroIllustH + 10;
+  drawTextSingleLine(`${card.pin}`, hx + 8, textY - 2, 1.2, ...WHITE, true);
+  drawTextSingleLine(card.story.title, hx + 30, textY, 1.2, ...DARK_TEXT, true);
+  const summaryY = textY + 28;
+  drawWrappedText(card.story.summary, hx + 12, summaryY, heroCardW - 24, 0.7, ...MID_TEXT, false);
+  const sourceY = hy + heroCardH - 22;
+  drawTextSingleLine(card.story.source, hx + 12, sourceY, 0.6, ...MID_TEXT, false);
 }
 
-// Need to access stories in drawWorldMapPanel
-let stories: NewsItem[] = [];
+y += heroCardH + 16;
 
-function main(): void {
-  stories = loadNewsData();
+const gridStartY = y;
+const gridCols = 3;
+const gridRows = 4;
+const cardW = Math.round((WIDTH - 100) / 3);
+const cardH = 150;
+const gridStories = stories.slice(3, 15);
 
-  const canvas = new Canvas(WIDTH, HEIGHT, COLORS.paper);
+for (let row = 0; row < gridRows; row++) {
+  for (let col = 0; col < gridCols; col++) {
+    const idx = row * gridCols + col;
+    if (idx >= gridStories.length) continue;
+    const story = gridStories[idx];
+    const pinNum = idx + 4;
+    const cx = 40 + col * (cardW + 10);
+    const cy = gridStartY + row * (cardH + 10);
+    const [rr, rg, rb] = REGION_COLORS[story.region];
 
-  // Draw all sections
-  drawMasthead(canvas);
-  drawRegionDistribution(canvas);
-  drawDayInNumbers(canvas);
+    drawShadow(cx, cy, cardW, cardH, 6);
+    drawRoundedRect(cx, cy, cardW, cardH, 6, ...CARD_WHITE);
+    fillRect(cx, cy, 5, cardH, rr, rg, rb);
 
-  // Hero cards (stories 0-2)
-  for (let i = 0; i < 3; i++) {
-    const x = 24 + i * (320 + 12);
-    const region = REGIONS.find(r => r.name === stories[i].region);
-    drawHeroCard(canvas, i, stories[i], region?.color || COLORS.world, x, 190);
+    drawTextSingleLine(`${pinNum}`, cx + 8, cy + 8, 1.0, ...WHITE, true);
+    drawWrappedText(story.title, cx + 28, cy + 8, cardW - 36, 0.85, ...DARK_TEXT, true);
+    const summaryY = cy + 48;
+    drawWrappedText(story.summary, cx + 10, summaryY, cardW - 20, 0.65, ...MID_TEXT, false);
+    drawTextSingleLine(story.source, cx + 10, cy + cardH - 18, 0.55, ...MID_TEXT, false);
+
+    const iconX = cx + cardW - 50;
+    const iconY = cy + 10;
+    if (pinNum === 4) {
+      drawTextSingleLine('9-6', iconX, iconY, 0.7, rr, rg, rb, true);
+      drawPolygon([[iconX+25,iconY],[iconX+30,iconY+10],[iconX+20,iconY+10]], rr, rg, rb, true);
+    } else if (pinNum === 5) {
+      drawTextSingleLine('ANT $83', iconX - 10, iconY, 0.6, 40, 180, 60, true);
+      drawAALine(iconX + 30, iconY + 12, iconX + 55, iconY + 2, 40, 180, 60, 2);
+      drawAALine(iconX + 55, iconY + 2, iconX + 65, iconY - 4, 40, 180, 60, 2);
+    } else if (pinNum === 6) {
+      drawTextSingleLine('FOSSIL', iconX - 5, iconY, 0.55, 200, 60, 60, true);
+      drawAALine(iconX + 25, iconY + 2, iconX + 45, iconY + 10, 200, 60, 60, 2);
+      drawTextSingleLine('CUT', iconX + 28, iconY - 2, 0.55, 200, 60, 60, true);
+    } else if (pinNum === 7) {
+      drawTextSingleLine('OVERTURNED', iconX - 15, iconY, 0.5, 60, 100, 220, true);
+      drawPolygon([[iconX+35,iconY+2],[iconX+40,iconY-8],[iconX+45,iconY+2]], 60, 100, 220, true);
+    } else if (pinNum === 8) {
+      drawTextSingleLine('109-0', iconX, iconY, 0.7, rr, rg, rb, true);
+      fillRect(iconX + 32, iconY + 2, 25, 8, rr, rg, rb);
+    } else if (pinNum === 9) {
+      drawTextSingleLine('4.9%', iconX + 5, iconY, 0.7, 220, 60, 60, true);
+      drawAALine(iconX + 30, iconY + 10, iconX + 40, iconY + 6, 220, 60, 60, 2);
+      drawAALine(iconX + 40, iconY + 6, iconX + 50, iconY, 220, 60, 60, 2);
+      drawAALine(iconX + 50, iconY, iconX + 60, iconY - 4, 220, 60, 60, 2);
+    } else if (pinNum === 10) {
+      for (let r = 12; r > 2; r -= 2) {
+        drawCircle(iconX + 20, iconY + 6, r, 0, 180, 255, false);
+      }
+    } else if (pinNum === 11) {
+      drawAALine(iconX + 10, iconY + 14, iconX + 20, iconY + 4, 180, 100, 50, 3);
+      drawAALine(iconX + 20, iconY + 4, iconX + 30, iconY + 14, 180, 100, 50, 3);
+      drawAALine(iconX + 30, iconY + 14, iconX + 40, iconY + 4, 180, 100, 50, 3);
+    } else if (pinNum === 12) {
+      drawTextSingleLine('3-YR BAN', iconX - 5, iconY, 0.55, 220, 60, 60, true);
+    } else if (pinNum === 13) {
+      for (let b = 0; b < 3; b++) {
+        fillRect(iconX + 10 + b * 15, iconY + 12, 10, 20 - b * 5, rr, rg, rb);
+      }
+    } else if (pinNum === 14) {
+      drawTextSingleLine('1,000+', iconX - 2, iconY, 0.55, 60, 100, 220, true);
+      for (let d = 0; d < 4; d++) {
+        drawAALine(iconX + 35, iconY + 2 + d * 3, iconX + 45, iconY - 2 + d * 3, 60, 100, 220, 1);
+      }
+    } else if (pinNum === 15) {
+      drawAALine(iconX + 15, iconY + 10, iconX + 25, iconY + 2, 220, 160, 40, 2);
+      drawAALine(iconX + 25, iconY + 2, iconX + 35, iconY + 10, 220, 160, 40, 2);
+    }
   }
-
-  // Grid cards (stories 3-14)
-  drawGridCards(canvas, stories, 3);
-
-  // World map panel + story 16
-  drawWorldMapPanel(canvas);
-
-  // Footer
-  drawFooter(canvas);
-
-  // Encode and write PNG
-  const png = encodePNG(canvas);
-
-  const outputDir = path.join(__dirname, 'output');
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
-
-  fs.writeFileSync(path.join(outputDir, 'entry.png'), png);
-  console.log(`PNG written: ${png.length} bytes`);
 }
 
-main();
+y = gridStartY + gridRows * (cardH + 10) + 8;
+
+const mapRowY = y;
+const mapRowH = 180;
+const mapW = Math.round((WIDTH - 100) * 2 / 3);
+const mapX = 40;
+const mapH = mapRowH;
+const story16W = WIDTH - mapX - mapW - 50;
+const story16X = mapX + mapW + 10;
+
+fillRect(mapX, mapRowY, mapW, mapH, 20, 35, 55);
+
+const mapLonMin = -180, mapLonMax = 180;
+const mapLatMin = -90, mapLatMax = 90;
+function lonToX(lon: number): number {
+  return mapX + Math.round(((lon - mapLonMin) / (mapLonMax - mapLonMin)) * mapW);
+}
+function latToY(lat: number): number {
+  return mapRowY + Math.round(((mapLatMax - lat) / (mapLatMax - mapLatMin)) * mapH);
+}
+
+for (let lat = -60; lat <= 60; lat += 30) {
+  const y = latToY(lat);
+  drawLine(mapX, y, mapX + mapW, y, 30, 50, 80, 1);
+}
+for (let lon = -150; lon <= 150; lon += 30) {
+  const x = lonToX(lon);
+  drawLine(x, mapRowY, x, mapRowY + mapH, 30, 50, 80, 1);
+}
+
+const continents: [number, number][][] = [
+  [[-130, 60], [-60, 60], [-60, 15], [-80, 15], [-90, 30], [-110, 35], [-130, 50]],
+  [[-80, 15], [-60, 15], [-60, -55], [-80, -55]],
+  [[-20, 70], [40, 70], [40, 35], [30, 35], [20, 20], [10, 15], [-10, 35], [-20, 50]],
+  [[-20, 35], [55, 35], [55, -35], [-20, -35]],
+  [[100, 30], [150, 30], [150, -10], [100, -10]],
+  [[110, -10], [155, -10], [155, -45], [110, -45]],
+];
+
+for (const poly of continents) {
+  const pts: [number, number][] = poly.map(([lon, lat]) => [lonToX(lon), latToY(lat)]);
+  drawPolygon(pts, 60, 90, 50, true);
+  drawPolygon(pts, 90, 130, 70, false);
+}
+
+for (const pin of pins) {
+  if (pin.special) continue;
+  const px = lonToX(pin.lon);
+  const py = latToY(pin.lat);
+  drawCircle(px, py, 6, 255, 255, 255, true);
+  drawCircle(px, py, 4, 220, 30, 40, true);
+  drawTextSingleLine(`${pin.id}`, px - 3, py - 5, 0.6, 255, 255, 255, true);
+}
+
+const voyagerX = mapX + mapW - 10;
+const voyagerY = mapRowY + 10;
+drawRoundedRect(voyagerX - 50, voyagerY, 60, 20, 4, 0, 100, 200);
+drawTextSingleLine('3 -> VOYAGER', voyagerX - 48, voyagerY + 4, 0.5, 255, 255, 255, true);
+
+drawTextSingleLine('WHERE IT HAPPENED', mapX + 10, mapRowY + 10, 0.7, 255, 255, 255, true);
+
+drawShadow(story16X, mapRowY, story16W, mapH, 8);
+drawRoundedRect(story16X, mapRowY, story16W, mapH, 8, ...CARD_WHITE);
+const s16 = stories[15];
+const [r16, g16, b16] = REGION_COLORS[s16.region];
+fillRect(story16X, mapRowY, 5, mapH, r16, g16, b16);
+drawTextSingleLine('16', story16X + 8, mapRowY + 8, 1.0, ...WHITE, true);
+drawWrappedText(s16.title, story16X + 28, mapRowY + 8, story16W - 36, 0.85, ...DARK_TEXT, true);
+
+const glacierX = story16X + 20;
+const glacierY = mapRowY + 60;
+const glacierW = story16W - 40;
+drawPolygon([
+  [glacierX, glacierY],
+  [glacierX + glacierW, glacierY - 20],
+  [glacierX + glacierW, glacierY + 60],
+  [glacierX, glacierY + 80]
+], 200, 230, 255, true);
+drawPolygon([
+  [glacierX, glacierY + 80],
+  [glacierX + glacierW, glacierY + 60],
+  [glacierX + glacierW, glacierY + 90],
+  [glacierX, glacierY + 110]
+], 80, 140, 180, true);
+drawPolygon([
+  [glacierX + 10, glacierY + 90],
+  [glacierX + glacierW - 10, glacierY + 70],
+  [glacierX + glacierW - 10, glacierY + 100],
+  [glacierX + 10, glacierY + 120]
+], 40, 100, 150, true);
+
+drawWrappedText(s16.summary, story16X + 10, mapRowY + 140, story16W - 20, 0.65, ...MID_TEXT, false);
+drawTextSingleLine(s16.source, story16X + 10, mapRowY + mapH - 18, 0.55, ...MID_TEXT, false);
+
+y = mapRowY + mapH + 12;
+
+const footerH = 36;
+fillRect(0, y, WIDTH, footerH, 18, 24, 32);
+let fx = 40;
+for (const region of REGION_ORDER) {
+  const [rr, rg, rb] = REGION_COLORS[region];
+  fillRect(fx, y + 10, 16, 16, rr, rg, rb);
+  drawTextSingleLine(region, fx + 22, y + 12, 0.6, ...LIGHT_GRAY, false);
+  fx += measureText(region, 0.6) + 40;
+}
+drawTextSingleLine('THURSDAY 19 NOVEMBER 2026 | 16 VERIFIED STORIES', WIDTH - 380, y + 12, 0.6, ...LIGHT_GRAY, false);
+
+const outputDir = '/output';
+if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
+const pngData = encodePNG(canvas, WIDTH, HEIGHT);
+writeFileSync('/output/entry.png', pngData);
+
+const outDir = join(process.cwd(), 'out');
+if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+copyFileSync('/output/entry.png', join(outDir, 'entry.png'));
+
+console.log('Render complete: /output/entry.png -> out/entry.png');
